@@ -1,7 +1,6 @@
 # Imports
 import os
 import re
-import builtins
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -10,7 +9,6 @@ from scipy.optimize import curve_fit
 from scipy.stats import linregress
 from scipy.integrate import trapezoid
 from IPython.display import display, HTML
-from IPython.utils.io import capture_output
 import ipywidgets as widgets
 
 # Data Quality & Visualisation
@@ -750,10 +748,10 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
             
             if len(signal) == 0:
                 continue
-                
-            row_features[f"{ch}_min"] = np.min(signal)
-            row_features[f"{ch}_max"] = np.max(signal)
-            
+
+            row_features[f"{ch}_min"] = min(signal)
+            row_features[f"{ch}_max"] = max(signal)
+
             row_features[f"{ch}_std"] = np.std(signal)
             
             ch_mean = np.mean(signal)
@@ -982,6 +980,8 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
             change_df['chip_id'] = chip_id
             all_changes_PEL.append(change_df)
             
+            event_norm_df = event_norm_df[event_norm_df['stage'] != 'Start']
+            
             all_events_PEL_norm.append(event_norm_df)
 
             print(f"Normalised Metrics for Chip {chip_id}")
@@ -1061,7 +1061,48 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
         plot_all_statistics(pooled_norm_df, x_col='stage', y_col='Norm_Signal', ylabel='Normalised Signal (All Channels)', title_prefix='Overall Pooled Normalised')
         plot_all_statistics(pooled_change_df, x_col='stage', y_col='Delta_Signal', ylabel='Delta Signal (All Channels)', title_prefix='Overall Pooled Delta')
 
-    return all_events_PEL_df, change_PEL_df, pd.concat(all_intrastage_PEL, ignore_index=True), all_events_PEL_norm_df, pooled_norm_df, pooled_change_df
+    pel_intra_df = pd.concat(all_intrastage_PEL, ignore_index=True)
+    
+    if not pel_intra_df.empty:
+
+        id_vars = [col for col in ['stage', 'time', 'duration', 'chip_id'] if col in pel_intra_df.columns]
+        suffixes = ['_std', '_auc', '_stability', '_init_slope', '_min', '_max']
+        melted_chunks = []
+        
+        for ch in channels:
+
+            ch_cols = [f"{ch}{suff}" for suff in suffixes if f"{ch}{suff}" in pel_intra_df.columns]
+            
+            if not ch_cols:
+                continue
+                
+            temp_df = pel_intra_df[id_vars + ch_cols].copy()
+            
+            rename_dict = {f"{ch}{suff}": f"pooled_signal{suff}" for suff in suffixes}
+            temp_df = temp_df.rename(columns=rename_dict)
+            
+            temp_df['Channel'] = ch
+            melted_chunks.append(temp_df)
+            
+        if melted_chunks:
+
+            pooled_intra_df = pd.concat(melted_chunks, ignore_index=True)
+            
+            cols = id_vars + ['Channel'] + [col for col in pooled_intra_df.columns if col not in id_vars + ['Channel']]
+            pooled_intra_df = pooled_intra_df[cols]
+
+            original_stage_order = pel_intra_df['stage'].drop_duplicates().tolist()
+
+            pooled_intra_df['stage'] = pd.Categorical(pooled_intra_df['stage'], categories=original_stage_order, ordered=True)
+            
+            pooled_intra_df = pooled_intra_df.sort_values(by=['chip_id', 'stage', 'Channel']).reset_index(drop=True)
+
+        else:
+            pooled_intra_df = pd.DataFrame()
+    else:
+        pooled_intra_df = pd.DataFrame()
+
+    return all_events_PEL_df, change_PEL_df, pd.concat(all_intrastage_PEL, ignore_index=True), all_events_PEL_norm_df, pooled_norm_df, pooled_change_df, pooled_intra_df
 
 def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_dfs):
 
@@ -1298,6 +1339,7 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
     with overall_stats_output:
 
         for name, (pooled_norm, pooled_change) in pooled_results.items():
+
             print(f"\n{'='*20} {name.upper()} {'='*20}")
             print(f"Pooled Observations (n) across all channels: {len(pooled_norm)}")
             print("Data preview (Grouped by Chip ID):")
@@ -1306,10 +1348,57 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
             plot_all_statistics(pooled_norm, x_col='stage', y_col='Norm_Signal', ylabel='Normalised Signal (All Channels)', title_prefix=f'{name} Overall Pooled Normalised')
             plot_all_statistics(pooled_change, x_col='stage', y_col='Delta_Signal', ylabel='Delta Signal (All Channels)', title_prefix=f'{name} Overall Pooled Delta')
 
-    return (imp_df, imp_change_df, imp_intra_df, imp_norm_df, pooled_results["Immediate"][0], pooled_results["Immediate"][1],
-        comb_df, comb_change_df, comb_intra_df, comb_norm_df, pooled_results["Combined"][0], pooled_results["Combined"][1],
-        avg_imp_df, avg_imp_change_df, avg_imp_intra_df, avg_imp_norm_df, pooled_results.get("5s Avg", (None, None))[0], pooled_results.get("5s Avg", (None, None))[1],
-        avg_comb_df, avg_comb_change_df, avg_comb_intra_df, avg_comb_norm_df, pooled_results.get("5s Avg Combined", (None, None))[0], pooled_results.get("5s Avg Combined", (None, None))[1]
+    def pool_intra_df(df, channels_list):
+
+        if df.empty:
+            return pd.DataFrame()
+        
+        id_vars = [col for col in ['stage', 'time', 'duration', 'chip_id'] if col in df.columns]
+        suffixes = ['_std', '_auc', '_stability', '_init_slope', '_min', '_max']
+        melted_chunks = []
+        
+        for ch in channels_list:
+            
+            ch_cols = [f"{ch}{suff}" for suff in suffixes if f"{ch}{suff}" in df.columns]
+            
+            if not ch_cols:
+                continue
+                
+            temp_df = df[id_vars + ch_cols].copy()
+            
+            rename_dict = {f"{ch}{suff}": f"pooled_signal{suff}" for suff in suffixes}
+            temp_df = temp_df.rename(columns=rename_dict)
+            
+            temp_df['Channel'] = ch
+            melted_chunks.append(temp_df)
+            
+        if melted_chunks:
+
+            pooled = pd.concat(melted_chunks, ignore_index=True)
+            
+            cols = id_vars + ['Channel'] + [col for col in pooled.columns if col not in id_vars + ['Channel']]
+
+            pooled = pooled[cols]
+
+            original_stage_order = df['stage'].drop_duplicates().tolist()
+            
+            pooled['stage'] = pd.Categorical(pooled['stage'], categories=original_stage_order, ordered=True)
+            
+            pooled = pooled.sort_values(by=['chip_id', 'stage', 'Channel']).reset_index(drop=True)
+
+            return pooled
+            
+        return pd.DataFrame()
+
+    imp_intra_pooled = pool_intra_df(imp_intra_df, channels)
+    comb_intra_pooled = pool_intra_df(comb_intra_df, channels)
+    avg_imp_intra_pooled = pool_intra_df(avg_imp_intra_df, channels)
+    avg_comb_intra_pooled = pool_intra_df(avg_comb_intra_df, channels)
+
+    return (imp_df, imp_change_df, imp_intra_df, imp_norm_df, pooled_results["Immediate"][0], pooled_results["Immediate"][1], imp_intra_pooled,
+        comb_df, comb_change_df, comb_intra_df, comb_norm_df, pooled_results["Combined"][0], pooled_results["Combined"][1], comb_intra_pooled,
+        avg_imp_df, avg_imp_change_df, avg_imp_intra_df, avg_imp_norm_df, pooled_results.get("5s Avg", (None, None))[0], pooled_results.get("5s Avg", (None, None))[1], avg_imp_intra_pooled,
+        avg_comb_df, avg_comb_change_df, avg_comb_intra_df, avg_comb_norm_df, pooled_results.get("5s Avg Combined", (None, None))[0], pooled_results.get("5s Avg Combined", (None, None))[1], avg_comb_intra_pooled
     )
 
 def run_standard_curve_analysis(standard_curves_df):

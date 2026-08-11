@@ -38,8 +38,17 @@ def detect_anomalies(df, feature_cols, contamination=0.05):
     return df_clean
 
 def pivot_chip_data(df, stage_col, val_col):
-    return df.pivot_table(index='chip_id', columns=stage_col, values=val_col, aggfunc='mean', observed=False)
+    """
+    Pivots data for anomaly detection. 
+    If a 'Channel' column exists, it uses BOTH chip_id and Channel as the row index, 
+    effectively treating each channel as an independent observation (doubling the dataset size).
+    """
 
+    if 'Channel' in df.columns:
+        return df.pivot_table(index=['chip_id', 'Channel'], columns=stage_col, values=val_col, aggfunc='mean', observed=False)
+    else:
+        return df.pivot_table(index='chip_id', columns=stage_col, values=val_col, aggfunc='mean', observed=False)
+    
 def summarise_correlations(corr_matrix, label, num=3):
     """Summarise strongest positive, strongest negative, and weakest correlations."""
 
@@ -130,24 +139,37 @@ def create_wide_intra(intra_df, val_col):
             
     return pd.concat(wide_list, axis=1) if wide_list else pd.DataFrame()
 
-def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col='quad_ch1_change', title="PEL Analysis"):
+def get_outlier_chips(anomalies_df):
+    """Extracts unique chip IDs from the anomaly dataframe, handling both standard and MultiIndex."""
+
+    if anomalies_df.empty:
+        return []
+    
+    outliers = anomalies_df[anomalies_df['anomaly'] == -1]
+    
+    if isinstance(outliers.index, pd.MultiIndex):
+        return outliers.index.get_level_values('chip_id').unique().tolist()
+    
+    return outliers.index.tolist()
+
+def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col='quad_ch1_change', intra_val_col=None, title="PEL Analysis"):
+
+    intra_target = intra_val_col if intra_val_col else val_col
 
     events_df = events_df[~events_df['stage'].isin(['Start', 'Initial'])]
     
     wide_events = pivot_chip_data(events_df, 'stage', val_col)
     wide_changes = pivot_chip_data(changes_df, 'stage', change_col)
-    wide_intra = create_wide_intra(intra_df, val_col)
+    wide_intra = create_wide_intra(intra_df, intra_target)
 
     anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist(), contamination=0.05)
-    outliers_abs = anomalies_abs[anomalies_abs['anomaly'] == -1].index.tolist() if not anomalies_abs.empty else []
+    outliers_abs = get_outlier_chips(anomalies_abs)
 
     anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist(), contamination=0.05)
-    outliers_delta = anomalies_delta[anomalies_delta['anomaly'] == -1].index.tolist() if not anomalies_delta.empty else []
+    outliers_delta = get_outlier_chips(anomalies_delta)
 
-    outliers_intra = []
-    if not wide_intra.empty:
-        anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist(), contamination=0.05)
-        outliers_intra = anomalies_intra[anomalies_intra['anomaly'] == -1].index.tolist() if not anomalies_intra.empty else []
+    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist(), contamination=0.05)
+    outliers_intra = get_outlier_chips(anomalies_intra)
 
     with collapsible_output(f"{title} - Absolute Signal"):
 
@@ -173,41 +195,38 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
         print(f"\nPotential Anomalous Chips (Delta): {len(outliers_delta)}")
         analyse_anomaly_drivers(wide_changes, anomalies_delta, f"PEL {change_col} Stage Delta")
     
-    if not wide_intra.empty:
+    with collapsible_output(f"{title} - Intra-stage Kinetics"):
 
-        with collapsible_output(f"{title} - Intra-stage Kinetics"):
+        plt.figure(figsize=(10, 6))
+        sns.heatmap(wide_intra.corr(), cmap='plasma', center=0, annot=True)
+        plt.title(f"PEL [{intra_target}]: Intra-stage Kinetics Correlation")
+        plt.tight_layout()
+        plt.show()
 
-            plt.figure(figsize=(10, 6))
-            sns.heatmap(wide_intra.corr(), cmap='plasma', center=0, annot=True)
-            plt.title(f"PEL [{val_col}]: Intra-stage Kinetics Correlation")
-            plt.tight_layout()
-            plt.show()
+        summarise_correlations(wide_intra.corr(), f"PEL {intra_target} Intra-stage Kinetics")
+        print(f"\nPotential Anomalous Chips (Intra-stage Kinetics): {len(outliers_intra)}")
+        analyse_anomaly_drivers(wide_intra, anomalies_intra, f"PEL {intra_target} Intra-stage Kinetics")
 
-            summarise_correlations(wide_intra.corr(), f"PEL {val_col} Intra-stage Kinetics")
-            print(f"\nPotential Anomalous Chips (Intra-stage Kinetics): {len(outliers_intra)}")
-            analyse_anomaly_drivers(wide_intra, anomalies_intra, f"PEL {val_col} Intra-stage Kinetics")
-        
     return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra
 
-def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='channel1', change_col='channel1_change', title="Immobilisation Analysis"):
+def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='channel1', change_col='channel1_change', intra_val_col=None, title="Immobilisation Analysis"):
+
+    intra_target = intra_val_col if intra_val_col else val_col
+
     events_df = events_df[~events_df['stage'].isin(['Start', 'Initial'])]
 
     wide_events = pivot_chip_data(events_df, 'stage', val_col)
     wide_changes = pivot_chip_data(changes_df, 'stage', change_col)
-    wide_intra = create_wide_intra(intra_df, val_col)
+    wide_intra = create_wide_intra(intra_df, intra_target)
 
     anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist(), contamination=0.05)
-    outliers_abs = anomalies_abs[anomalies_abs['anomaly'] == -1].index.tolist() if not anomalies_abs.empty else []
+    outliers_abs = get_outlier_chips(anomalies_abs)
 
     anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist(), contamination=0.05)
-    outliers_delta = anomalies_delta[anomalies_delta['anomaly'] == -1].index.tolist() if not anomalies_delta.empty else []
+    outliers_delta = get_outlier_chips(anomalies_delta)
 
-    outliers_intra = []
-
-    if not wide_intra.empty:
-
-        anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist(), contamination=0.05)
-        outliers_intra = anomalies_intra[anomalies_intra['anomaly'] == -1].index.tolist() if not anomalies_intra.empty else []
+    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist(), contamination=0.05)
+    outliers_intra = get_outlier_chips(anomalies_intra)
 
     with collapsible_output(f"{title} - Absolute Signal"):
 
@@ -232,52 +251,75 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
         print(f"\nPotential Anomalous Chips (Delta): {len(outliers_delta)}")
         analyse_anomaly_drivers(wide_changes, anomalies_delta, f"Immob [{split_name}] {change_col} Stage Delta")
     
-    if not wide_intra.empty:
+    with collapsible_output(f"{title} - Intra-stage Kinetics"):
 
-        with collapsible_output(f"{title} - Intra-stage Kinetics"):
+        plt.figure(figsize=(20, 20))
+        sns.heatmap(wide_intra.corr(), cmap='plasma', center=0, annot=True)
+        plt.title(f"Immob [{split_name}] - {intra_target}: Intra-stage Kinetics Correlation")
+        plt.show()
 
-            plt.figure(figsize=(20, 20))
-            sns.heatmap(wide_intra.corr(), cmap='plasma', center=0, annot=True)
-            plt.title(f"Immob [{split_name}] - {val_col}: Intra-stage Kinetics Correlation")
-            plt.show()
-
-            summarise_correlations(wide_intra.corr(), f"Immob [{split_name}] {val_col} Intra-stage Kinetics")
-            print(f"\nPotential Anomalous Chips (Intra-stage Kinetics): {len(outliers_intra)}")
-            analyse_anomaly_drivers(wide_intra, anomalies_intra, f"Immob [{split_name}] {val_col} Intra-stage Kinetics")
-        
+        summarise_correlations(wide_intra.corr(), f"Immob [{split_name}] {intra_target} Intra-stage Kinetics")
+        print(f"\nPotential Anomalous Chips (Intra-stage Kinetics): {len(outliers_intra)}")
+        analyse_anomaly_drivers(wide_intra, anomalies_intra, f"Immob [{split_name}] {intra_target} Intra-stage Kinetics")
+    
     return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra
 
-def plot_pel_layer_shifts(df, channel_name="Channel 1", title="PEL Layer Shifts"):
+def plot_pel_layer_shifts(pel_changes, channels_dict=None):
+
+    if channels_dict is None:
+        channels_dict = {
+            "Channel 1": "quad_ch1_change",
+            "Channel 2": "quad_ch2_change"
+        }
     
-    with collapsible_output(title):
+    df_plot = pel_changes[pel_changes['stage'] != 'Total_Shift_Initial_to_Final'].copy()
 
-        layer_cols = [col for col in df.columns if col != 'Start -> End']
-        fig = go.Figure()
-        
-        for chip_id, row in df.iterrows():
+    for ch_name, ch_col in channels_dict.items():
 
-            fig.add_trace(go.Scatter(x=layer_cols, y=row[layer_cols], mode='lines+markers', name=str(chip_id), opacity=0.6, marker=dict(size=6), visible='legendonly'))
+        with collapsible_output(f"PEL Layer Shifts: {ch_name}"):
+            
+            fig = go.Figure()
+            
+            for chip_id, df_chip in df_plot.groupby('chip_id'):
 
-        fig.update_layout(title=f"PEL Layer Build-up: Shift per Transition ({channel_name})", xaxis_title="Layer Transition", yaxis_title="Signal Shift (Δ)", template="plotly_white", hovermode="x unified", height=600)
-        fig.update_xaxes(tickangle=45)
-        fig.show()
+                fig.add_trace(go.Scatter(
+                    x=df_chip['stage'], 
+                    y=df_chip[ch_col], 
+                    mode='lines+markers', 
+                    name=str(chip_id), 
+                    opacity=0.6, 
+                    marker=dict(size=6), 
+                    visible='legendonly'
+                ))
 
-        plt.figure(figsize=(10, 6))
+            fig.update_layout(
+                title=f"PEL Layer Build-up: Shift per Transition ({ch_name})", 
+                xaxis_title="Layer Transition", 
+                yaxis_title="Signal Shift (Δ)", 
+                template="plotly_white", 
+                hovermode="x unified", 
+                height=600
+            )
 
-        for chip_id, row in df.iterrows():
-            plt.plot(layer_cols, row[layer_cols], marker='o', alpha=0.5, label=chip_id)
+            fig.update_xaxes(tickangle=45)
+            fig.show()
 
-        plt.title(f"PEL Layer Build-up: Shift per Transition ({channel_name})")
-        plt.xlabel("Layer Transition")
-        plt.ylabel("Signal Shift (Δ)")
-        plt.xticks(rotation=45)
-        plt.grid(True, alpha=0.3)
+            plt.figure(figsize=(10, 6))
+            
+            for chip_id, df_chip in df_plot.groupby('chip_id'):
+                plt.plot(df_chip['stage'], df_chip[ch_col], marker='o', alpha=0.5, label=chip_id)
 
-        if len(df) <= 25:
-            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            plt.title(f"PEL Layer Build-up: Shift per Transition ({ch_name})")
+            plt.xlabel("Layer Transition")
+            plt.ylabel("Signal Shift (Δ)")
+            plt.xticks(rotation=45)
+            plt.grid(True, alpha=0.3)
 
-        plt.tight_layout()
-        plt.show()
+            if df_plot['chip_id'].nunique() <= 25:
+                plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+            plt.tight_layout()
+            plt.show()
 
 def combine_anomalies(*outliers_lists, title="Combined Anomalies Summary"):
     """Combines an arbitrary number of outlier lists into a single set."""
@@ -300,10 +342,11 @@ def combine_anomalies(*outliers_lists, title="Combined Anomalies Summary"):
 
     return all_outlier_chips
 
-def analyse_cross_stage_split(pel_df, immob_df, split_name, channel_name, pel_outliers, immob_outliers, sc_metrics_df=None, title="Cross-Stage Validation"):
+def analyse_cross_stage_split(pel_df, immob_df, split_name, pel_outliers=None, immob_outliers=None, sc_metrics_df=None, title="Cross-Stage Validation"):
     """
     Merges PEL and a specific Immobilisation split, runs PCA & Clustering,
-    plots the results with anomaly highlights. Validates against Standard Curves if provided (Channel 1).
+    plots the results with anomaly highlights for Channel 1, Channel 2, and Overall.
+    Validates against Standard Curves if provided.
     """
     
     pel_copy = pel_df.copy()
@@ -311,151 +354,189 @@ def analyse_cross_stage_split(pel_df, immob_df, split_name, channel_name, pel_ou
     
     pel_copy.columns = pel_copy.columns.astype(str)
     immob_copy.columns = immob_copy.columns.astype(str)
-    
+
+    channel_mapping = {
+        'quad_ch1': 'Ch1', 'channel1': 'Ch1',
+        'quad_ch2': 'Ch2', 'channel2': 'Ch2'
+    }
+
+    if isinstance(pel_copy.index, pd.MultiIndex) and 'Channel' in pel_copy.index.names:
+        pel_copy = pel_copy.rename(index=channel_mapping, level='Channel')
+        
+    if isinstance(immob_copy.index, pd.MultiIndex) and 'Channel' in immob_copy.index.names:
+        immob_copy = immob_copy.rename(index=channel_mapping, level='Channel')
+
     merged = pd.merge(pel_copy, immob_copy, left_index=True, right_index=True, how='inner', suffixes=('_PEL', '_Immob')).dropna()
     
     if merged.empty:
-        print(f"[{split_name} - {channel_name}] Not enough overlapping chips between PEL and Immobilisation for cross-analysis.")
+        print(f"[{split_name}] Not enough overlapping chips between PEL and Immobilisation for cross-analysis.")
         return
         
-    with collapsible_output(title):
+    both_anomalies = set(pel_outliers if pel_outliers else []).union(set(immob_outliers if immob_outliers else []))
 
-        print(f"[{split_name} - {channel_name}] Overlapping chips analysed: {len(merged)}")
-        
-        features = merged.columns.tolist()
-        X_merged = StandardScaler().fit_transform(merged[features])
-        
-        pca = PCA(n_components=2)
-        pca_result = pca.fit_transform(X_merged)
-        
-        merged['PCA1'] = pca_result[:, 0]
-        merged['PCA2'] = pca_result[:, 1]
-        
-        print(f"[{split_name} - {channel_name}] Explained Variance by first 2 components: {pca.explained_variance_ratio_.sum()*100:.2f}%")
-        
-        kmeans = KMeans(n_clusters=2, random_state=8030, n_init=10)
-        merged['Cluster'] = kmeans.fit_predict(X_merged)
-        
-        plt.figure(figsize=(10, 6))
-        sns.scatterplot(data=merged, x='PCA1', y='PCA2', hue='Cluster', palette='Set1', s=100, alpha=0.7)
-        
-        both_anomalies = set(pel_outliers).union(set(immob_outliers))
-        anomaly_mask = merged.index.isin(both_anomalies)
-        
-        if anomaly_mask.any():
-            plt.scatter(merged.loc[anomaly_mask, 'PCA1'], merged.loc[anomaly_mask, 'PCA2'], edgecolor='black', facecolor='none', s=200, label='Flagged Anomaly', linewidth=2)
+    def analyse_subset(subset_df, label):
+
+        if subset_df.empty:
+            return
+            
+        with collapsible_output(f"{title} - {label}"):
+
+            print(f"[{split_name} - {label}] Overlapping chips analysed: {len(subset_df)}")
+            
+            features = subset_df.columns.tolist()
+            X_subset = StandardScaler().fit_transform(subset_df[features])
+            
+            pca = PCA(n_components=2)
+            pca_result = pca.fit_transform(X_subset)
+            
+            df_to_plot = subset_df.copy()
+            df_to_plot['PCA1'] = pca_result[:, 0]
+            df_to_plot['PCA2'] = pca_result[:, 1]
+            
+            print(f"[{split_name} - {label}] Explained Variance by first 2 components: {pca.explained_variance_ratio_.sum()*100:.2f}%")
+            
+            kmeans = KMeans(n_clusters=2, random_state=8030, n_init=10)
+            df_to_plot['Cluster'] = kmeans.fit_predict(X_subset)
+            
+            plt.figure(figsize=(10, 6))
+            sns.scatterplot(data=df_to_plot, x='PCA1', y='PCA2', hue='Cluster', palette='Set1', s=100, alpha=0.7)
+            
+            if isinstance(df_to_plot.index, pd.MultiIndex):
+                subset_chip_ids = df_to_plot.index.get_level_values('chip_id')
+            else:
+                subset_chip_ids = df_to_plot.index
+                
+            anomaly_mask = subset_chip_ids.isin(both_anomalies)
+            
+            if anomaly_mask.any():
+                plt.scatter(df_to_plot.loc[anomaly_mask, 'PCA1'], df_to_plot.loc[anomaly_mask, 'PCA2'], edgecolor='black', facecolor='none', s=200, label='Flagged Anomaly', linewidth=2)
+                            
+            plt.title(f"Cross-Stage PCA: {split_name} ({label})")
+            plt.xlabel("Principal Component 1 (General Signal Variance)")
+            plt.ylabel("Principal Component 2 (Stage-to-Stage Dynamic Variance)")
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.show()
+            
+            print(f"\n Cluster Profiling [{split_name} - {label}]")
+            cluster_means = df_to_plot[features].groupby(df_to_plot['Cluster']).mean()
+            overall_mean = df_to_plot[features].mean()
+            overall_std = df_to_plot[features].std().replace(0, 1e-9)
+            
+            cluster_zscores = (cluster_means - overall_mean) / overall_std
+            
+            for cluster_id in sorted(df_to_plot['Cluster'].unique()):
+
+                print(f"\nCluster {cluster_id} Profile (n={sum(df_to_plot['Cluster'] == cluster_id)} observations):")
+                
+                top_pos = cluster_zscores.loc[cluster_id].sort_values(ascending=False).head(3)
+                top_neg = cluster_zscores.loc[cluster_id].sort_values(ascending=True).head(3)
+                
+                print("  Defining High Features (Above Average):")
+                pos_found = False
+
+                for feat, z in top_pos.items():
+
+                    if z > 0.5:
+
+                        print(f"    - {feat}: +{z:.2f} standard deviations")
+                        pos_found = True
                         
-        plt.title(f"Cross-Stage PCA: {split_name} ({channel_name})")
-        plt.xlabel("Principal Component 1 (General Signal Variance)")
-        plt.ylabel("Principal Component 2 (Stage-to-Stage Dynamic Variance)")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.show()
-        
-        print(f"\n Cluster Profiling [{split_name} - {channel_name}]")
-        cluster_means = merged[features].groupby(merged['Cluster']).mean()
-        overall_mean = merged[features].mean()
-        overall_std = merged[features].std().replace(0, 1e-9)
-        
-        cluster_zscores = (cluster_means - overall_mean) / overall_std
-        
-        for cluster_id in sorted(merged['Cluster'].unique()):
+                if not pos_found: 
+                    print("    - None significantly above average")
+                    
+                print("  Defining Low Features (Below Average):")
+                neg_found = False
 
-            print(f"\nCluster {cluster_id} Profile (n={sum(merged['Cluster'] == cluster_id)} chips):")
+                for feat, z in top_neg.items():
+
+                    if z < -0.5:
+
+                        print(f"    - {feat}: {z:.2f} standard deviations")
+                        neg_found = True
+
+                if not neg_found: 
+                    print("    - None significantly below average")
             
-            top_pos = cluster_zscores.loc[cluster_id].sort_values(ascending=False).head(3)
-            top_neg = cluster_zscores.loc[cluster_id].sort_values(ascending=True).head(3)
-            
-            print("  Defining High Features (Above Average):")
+            if sc_metrics_df is not None:
 
-            pos_found = False
-
-            for feat, z in top_pos.items():
-
-                if z > 0.5:
-
-                    print(f"    - {feat}: +{z:.2f} standard deviations")
-                    pos_found = True
-
-            if not pos_found: 
-                print("    - None significantly above average")
+                print(f"\n--- Cluster Functional Yield (R² Comparison) [{split_name} - {label}] ---")
                 
-            print("  Defining Low Features (Below Average):")
-            neg_found = False
+                cluster_mapping = df_to_plot[['Cluster']].reset_index()
 
-            for feat, z in top_neg.items():
-
-                if z < -0.5:
-                    print(f"    - {feat}: {z:.2f} standard deviations")
-                    neg_found = True
-
-            if not neg_found: 
-                print("    - None significantly below average")
-        
-        if sc_metrics_df is not None:
-
-            print(f"\n--- Cluster Functional Yield (R² Comparison) [{split_name} - {channel_name}] ---")
-            
-            cluster_mapping = merged[['Cluster']].reset_index().rename(columns={'index': 'chip_id'})
-            sc_cluster_df = pd.merge(sc_metrics_df, cluster_mapping, on='chip_id', how='inner')
-            
-            if sc_cluster_df.empty:
-                print("No Standard Curve data available to map to clusters.")
-            else:
-
-                cluster_stats = sc_cluster_df.groupby('Cluster')['r2'].agg(['count', 'mean', 'median', 'std']).fillna(0)
-                print("Standard Curve R² Performance by Cluster:")
-                display(cluster_stats)
+                if 'index' in cluster_mapping.columns:
+                    cluster_mapping = cluster_mapping.rename(columns={'index': 'chip_id'})
+                    
+                sc_cluster_df = pd.merge(sc_metrics_df.reset_index(), cluster_mapping, on='chip_id', how='inner')
                 
-                plt.figure(figsize=(10, 6))
-                sns.boxplot(data=sc_cluster_df, x='Cluster', y='r2', showmeans=True,  meanprops={"marker":"o", "markerfacecolor":"white", "markeredgecolor":"black"})
-                sns.stripplot(data=sc_cluster_df, x='Cluster', y='r2', color='black', alpha=0.5, jitter=True)
-                plt.axhline(0.95, color='red', linestyle='--', label='Pass Threshold (0.95)')
-                
-                plt.title(f"Standard Curve R² Distribution by Manufacturing Cluster\n{split_name} ({channel_name})")
-                plt.xlabel("Manufacturing Cluster")
-                plt.ylabel("Standard Curve R² Score")
-                plt.legend()
-                plt.grid(True, alpha=0.3)
-                plt.tight_layout()
-                plt.show()
-                
-            anomaly_ids = list(both_anomalies.intersection(set(merged.index)))
-            
-            if not anomaly_ids:
-                print(f"[{split_name} - {channel_name}] No anomalous chips from the cross-stage analysis to validate against SC.")
-            else:
-                print(f"\n[{split_name} - {channel_name}] Validating functional performance for anomalous chip(s): {anomaly_ids}\n")
-                
-                anomaly_sc_data = sc_metrics_df[sc_metrics_df.index.isin(anomaly_ids)]
-                
-                if anomaly_sc_data.empty:
-                    print("No Standard Curve data found for the flagged anomalous chip(s).")
+                if sc_cluster_df.empty:
+                    print("No Standard Curve data available to map to clusters.")
                 else:
 
-                    print(f"{'Chip ID':<15} | {'Curve UUID':<40} | {'R² Score':<10} | {'Status'}")
-                    print("-" * 80)
+                    cluster_stats = sc_cluster_df.groupby('Cluster')['r2'].agg(['count', 'mean', 'median', 'std']).fillna(0)
+                    print("Standard Curve R² Performance by Cluster:")
+                    display(cluster_stats)
                     
-                    for chip_id, row in anomaly_sc_data.iterrows():
+                    plt.figure(figsize=(10, 6))
+                    sns.boxplot(data=sc_cluster_df, x='Cluster', y='r2', showmeans=True,  meanprops={"marker":"o", "markerfacecolor":"white", "markeredgecolor":"black"})
+                    sns.stripplot(data=sc_cluster_df, x='Cluster', y='r2', color='black', alpha=0.5, jitter=True)
+                    plt.axhline(0.95, color='red', linestyle='--', label='Pass Threshold (0.95)')
+                    
+                    plt.title(f"Standard Curve R² Distribution by Manufacturing Cluster\n{split_name} ({label})")
+                    plt.xlabel("Manufacturing Cluster")
+                    plt.ylabel("Standard Curve R² Score")
+                    plt.legend()
+                    plt.grid(True, alpha=0.3)
+                    plt.tight_layout()
+                    plt.show()
+                    
+                subset_unique_chips = set(subset_chip_ids)
+                anomaly_ids = list(both_anomalies.intersection(subset_unique_chips))
+                
+                if not anomaly_ids:
+                    print(f"[{split_name} - {label}] No anomalous chips from the cross-stage analysis to validate against SC.")
+                else:
 
-                        r2 = row['r2']
-                        curve_id = row['standard_curve_uuid']
-                        
-                        status = "PASSED" if r2 >= 0.95 else "FAILED"
-                        print(f"{chip_id:<15} | {curve_id:<40} | {r2:<10.4f} | {status}")
-            
-            normal_sc_data = sc_metrics_df[~sc_metrics_df.index.isin(anomaly_ids)]
+                    print(f"\n[{split_name} - {label}] Validating functional performance for anomalous chip(s): {anomaly_ids}\n")
+                    
+                    anomaly_sc_data = sc_metrics_df[sc_metrics_df.index.isin(anomaly_ids)]
+                    
+                    if anomaly_sc_data.empty:
+                        print("No Standard Curve data found for the flagged anomalous chip(s).")
+                    else:
 
-            if not normal_sc_data.empty:
-                print(f"\n>>> Average R² for NORMAL chips: {normal_sc_data['r2'].mean():.4f}")
-        else:
+                        print(f"{'Chip ID':<15} | {'Curve UUID':<40} | {'R² Score':<10} | {'Status'}")
+                        print("-" * 80)
 
-            anomaly_ids = list(both_anomalies.intersection(set(merged.index)))
-            print(f"\n--- Anomaly Identifications [{split_name} - {channel_name}] ---")
-            if anomaly_ids:
-                print(f"Flagged Anomalous Chips in cluster: {anomaly_ids}")
+                        for chip_id, row in anomaly_sc_data.iterrows():
+
+                            r2 = row['r2']
+                            curve_id = row['standard_curve_uuid']
+                            status = "PASSED" if r2 >= 0.95 else "FAILED"
+                            print(f"{chip_id:<15} | {curve_id:<40} | {r2:<10.4f} | {status}")
+                
+                normal_sc_data = sc_metrics_df[~sc_metrics_df.index.isin(anomaly_ids)]
+
+                if not normal_sc_data.empty:
+                    print(f"\n>>> Average R² for NORMAL chips: {normal_sc_data['r2'].mean():.4f}")
             else:
-                print("No anomalous chips detected in this cross-stage split.")
+
+                subset_unique_chips = set(subset_chip_ids)
+                anomaly_ids = list(both_anomalies.intersection(subset_unique_chips))
+                print(f"\n--- Anomaly Identifications [{split_name} - {label}] ---")
+
+                if anomaly_ids:
+                    print(f"Flagged Anomalous Chips in cluster: {anomaly_ids}")
+                else:
+                    print("No anomalous chips detected in this cross-stage split.")
+
+    if isinstance(merged.index, pd.MultiIndex) and 'Ch1' in merged.index.get_level_values('Channel'):
+        analyse_subset(merged.xs('Ch1', level='Channel', drop_level=False), "Channel 1")
+        
+    if isinstance(merged.index, pd.MultiIndex) and 'Ch2' in merged.index.get_level_values('Channel'):
+        analyse_subset(merged.xs('Ch2', level='Channel', drop_level=False), "Channel 2")
+        
+    analyse_subset(merged, "Overall (Pooled)")
 
 def print_correlation_insights(corr_matrix, split_name, channel_name, top_n=3):
     """Extracts and prints top positive, negative, and weakest correlations."""
@@ -471,16 +552,20 @@ def print_correlation_insights(corr_matrix, split_name, channel_name, top_n=3):
     print("Top Positive Correlations:")
     top_pos = corr_pairs[corr_pairs > 0].sort_values(ascending=False).head(top_n)
 
-    if top_pos.empty: print("  None")
+    if top_pos.empty: 
+        print("  None")
     else:
-        for (feat1, feat2), val in top_pos.items(): print(f"  - {feat1} & {feat2} (r = {val:.3f})")
+        for (feat1, feat2), val in top_pos.items(): 
+            print(f"  - {feat1} & {feat2} (r = {val:.3f})")
 
     print("\nTop Negative (Inverse) Correlations:")
     top_neg = corr_pairs[corr_pairs < 0].sort_values(ascending=True).head(top_n)
 
-    if top_neg.empty: print("  None")
+    if top_neg.empty: 
+        print("  None")
     else:
-        for (feat1, feat2), val in top_neg.items(): print(f"  - {feat1} & {feat2} (r = {val:.3f})")
+        for (feat1, feat2), val in top_neg.items(): 
+            print(f"  - {feat1} & {feat2} (r = {val:.3f})")
 
     print("\nWeakest Relationships (Closest to zero):")
     weakest = corr_pairs.reindex(corr_pairs.abs().sort_values().index).head(top_n)
@@ -489,13 +574,24 @@ def print_correlation_insights(corr_matrix, split_name, channel_name, top_n=3):
         print(f"  - {feat1} & {feat2} (r = {val:.3f})")
     print("\n")
 
-def cross_stage_correlations(pel_df, immob_df, split_name, channel_name, sc_metrics_df=None, title="Cross-Stage Correlations"):
+def cross_stage_correlations(pel_df, immob_df, split_name, sc_metrics_df=None, title="Cross-Stage Correlations"):
 
     pel_copy = pel_df.copy()
     immob_copy = immob_df.copy()
 
     pel_copy.columns = pel_copy.columns.astype(str)
     immob_copy.columns = immob_copy.columns.astype(str)
+
+    channel_mapping = {
+        'quad_ch1': 'Ch1', 'channel1': 'Ch1',
+        'quad_ch2': 'Ch2', 'channel2': 'Ch2'
+    }
+    
+    if isinstance(pel_copy.index, pd.MultiIndex) and 'Channel' in pel_copy.index.names:
+        pel_copy = pel_copy.rename(index=channel_mapping, level='Channel')
+        
+    if isinstance(immob_copy.index, pd.MultiIndex) and 'Channel' in immob_copy.index.names:
+        immob_copy = immob_copy.rename(index=channel_mapping, level='Channel')
 
     merged = pel_copy.merge(immob_copy, left_index=True, right_index=True, how="inner", suffixes=("_PEL", "_Immob"))
 
@@ -511,24 +607,42 @@ def cross_stage_correlations(pel_df, immob_df, split_name, channel_name, sc_metr
             sc_copy = sc_copy[numeric_cols]
             
         sc_first = sc_copy.sort_values("datetime").groupby(sc_copy.index, sort=False).first().drop(columns="datetime")
-        merged = merged.merge(sc_first, left_index=True, right_index=True, how="left")
+        if isinstance(merged.index, pd.MultiIndex):
+            merged = merged.merge(sc_first, left_on='chip_id', right_index=True, how="left")
+        else:
+            merged = merged.merge(sc_first, left_index=True, right_index=True, how="left")
 
-    with collapsible_output(title):
+    if merged.empty:
 
-        if merged.empty:
-            print(f"[{split_name} - {channel_name}] Not enough overlapping chips for cross-analysis.")
+        print(f"[{split_name}] Not enough overlapping data points for cross-analysis.")
+
+        return
+    
+    def analyse_subset(subset_df, label):
+
+        if subset_df.empty:
             return
+            
+        with collapsible_output(f"{title} - {label}"):
 
-        print(f"[{split_name} - {channel_name}] Overlapping chips analysed: {len(merged)}\n")
+            print(f"[{split_name} - {label}] Overlapping data points analysed: {len(subset_df)}\n")
 
-        corr_matrix = merged.corr()
-        print_correlation_insights(corr_matrix, split_name, channel_name, top_n=3)
+            corr_matrix = subset_df.corr()
+            print_correlation_insights(corr_matrix, split_name, label, top_n=3)
 
-        plt.figure(figsize=(20, 20))
-        sns.heatmap(corr_matrix, cmap='plasma', center=0, annot=True)
-        plt.title(f"{split_name} ({channel_name}) - Overall Correlation")
-        plt.tight_layout()
-        plt.show()
+            plt.figure(figsize=(20, 20))
+            sns.heatmap(corr_matrix, cmap='plasma', center=0, annot=True)
+            plt.title(f"{split_name} ({label}) - Overall Correlation")
+            plt.tight_layout()
+            plt.show()
+
+    if isinstance(merged.index, pd.MultiIndex) and 'Ch1' in merged.index.get_level_values('Channel'):
+        analyse_subset(merged.xs('Ch1', level='Channel', drop_level=False), "Channel 1")
+        
+    if isinstance(merged.index, pd.MultiIndex) and 'Ch2' in merged.index.get_level_values('Channel'):
+        analyse_subset(merged.xs('Ch2', level='Channel', drop_level=False), "Channel 2")
+        
+    analyse_subset(merged, "Overall (Pooled)")
 
 def create_interactive_dashboard(data_catalog):
 
@@ -879,4 +993,3 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
                     print("No Standard Curve data available for this chip.")
                     
                 print("\n")
-
