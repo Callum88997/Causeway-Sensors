@@ -724,7 +724,6 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
 
         start_time = events.loc[i, 'time']
         end_time = events.loc[i + 1, 'time']
-        
         stage_transition = f"{events.loc[i, 'stage']} -> {events.loc[i+1, 'stage']}"
         
         mask = (sens_time >= start_time) & (sens_time < end_time)
@@ -734,12 +733,10 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
             continue
             
         stage_time = stage_data[time_col].values
-        duration = stage_time[-1] - stage_time[0] if len(stage_time) > 1 else 0
         
         row_features = {
             'chip_id': chip_id,
-            'stage': stage_transition,
-            'duration': duration
+            'stage': stage_transition
         }
         
         for ch in channels:
@@ -749,28 +746,28 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
             if len(signal) == 0:
                 continue
 
-            row_features[f"{ch}_min"] = min(signal)
-            row_features[f"{ch}_max"] = max(signal)
-
+            initial_val = signal[0]
+            final_val = signal[-1]
+            
+            row_features[f"{ch}_initial"] = initial_val
+            row_features[f"{ch}_final"] = final_val
+            row_features[f"{ch}_net_change"] = final_val - initial_val
+            
+            row_features[f"{ch}_mean"] = np.mean(signal)
+            row_features[f"{ch}_min"] = np.min(signal)
+            row_features[f"{ch}_max"] = np.max(signal)
+            
             row_features[f"{ch}_std"] = np.std(signal)
             
-            ch_mean = np.mean(signal)
-            ch_median = np.median(signal)
-            row_features[f"{ch}_stability"] = abs(ch_mean - ch_median)
-            
             if len(signal) > 1:
-                row_features[f"{ch}_auc"] = trapezoid(signal, stage_time)
-            else:
-                row_features[f"{ch}_auc"] = 0.0
-                
-            n_pts = max(2, int(len(signal) * 0.20))
 
-            if len(signal) >= 2:
+                row_features[f"{ch}_total_variation"] = np.sum(np.abs(np.diff(signal)))
                 
-                slope, _, _, _, _ = linregress(stage_time[:n_pts], signal[:n_pts])
-                row_features[f"{ch}_init_slope"] = slope
+                slope, _, _, _, _ = linregress(stage_time, signal)
+                row_features[f"{ch}_overall_slope"] = slope
             else:
-                row_features[f"{ch}_init_slope"] = 0.0
+                row_features[f"{ch}_total_variation"] = 0.0
+                row_features[f"{ch}_overall_slope"] = 0.0
                 
         features_list.append(row_features)
         
@@ -815,8 +812,8 @@ class collapsible_output:
         self.out = widgets.Output(layout=widgets.Layout(display='none', margin='10px 0 10px 15px'))
         self.out.add_class('custom-clean-output')
         
-        self.expanded_label = f"[>] {self.title}"
-        self.collapsed_label = f"[v] {self.title}"
+        self.expanded_label = f"[v] {self.title}"
+        self.collapsed_label = f"[>] {self.title}"
         
         self.btn = widgets.Button(description=self.collapsed_label, layout=widgets.Layout(width='auto', border='none', padding='0', margin='0'))
         self.btn.style.button_color = 'transparent'
@@ -1065,8 +1062,8 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
     
     if not pel_intra_df.empty:
 
-        id_vars = [col for col in ['stage', 'time', 'duration', 'chip_id'] if col in pel_intra_df.columns]
-        suffixes = ['_std', '_auc', '_stability', '_init_slope', '_min', '_max']
+        id_vars = [col for col in ['stage', 'chip_id'] if col in pel_intra_df.columns]
+        suffixes = ['_initial', '_final', '_net_change', '_mean', '_min', '_max', '_std', '_total_variation', '_overall_slope']
         melted_chunks = []
         
         for ch in channels:
@@ -1353,8 +1350,8 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
         if df.empty:
             return pd.DataFrame()
         
-        id_vars = [col for col in ['stage', 'time', 'duration', 'chip_id'] if col in df.columns]
-        suffixes = ['_std', '_auc', '_stability', '_init_slope', '_min', '_max']
+        id_vars = [col for col in ['stage', 'chip_id'] if col in df.columns]
+        suffixes = ['_initial', '_final', '_net_change', '_mean', '_min', '_max', '_std', '_total_variation', '_overall_slope']
         melted_chunks = []
         
         for ch in channels_list:

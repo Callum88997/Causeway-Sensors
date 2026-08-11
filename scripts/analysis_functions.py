@@ -69,7 +69,7 @@ def summarise_correlations(corr_matrix, label, num=3):
     if len(positive):
 
         for (s1, s2), val in positive.head(num).items():
-            print(f"  • {s1} & {s2} (r = {val:.3f})")
+            print(f"  - {s1} & {s2} (r = {val:.3f})")
     else:
         print("  None")
 
@@ -78,14 +78,14 @@ def summarise_correlations(corr_matrix, label, num=3):
     if len(negative):
 
         for (s1, s2), val in negative.head(num).items():
-            print(f"  • {s1} & {s2} (r = {val:.3f})")
+            print(f"  - {s1} & {s2} (r = {val:.3f})")
     else:
         print("  None")
 
     print("\nWeakest Relationships (Closest to zero):")
 
     for (s1, s2), val in weakest.head(num).items():
-        print(f"  • {s1} & {s2} (r = {val:.3f})")
+        print(f"  - {s1} & {s2} (r = {val:.3f})")
 
 def analyse_anomaly_drivers(df, anomalies_df, label, num=3):
     """Compares anomalous chips to normal chips to find which stages drive the anomaly."""
@@ -120,12 +120,21 @@ def analyse_anomaly_drivers(df, anomalies_df, label, num=3):
 
         norm_val = normal_mean[stage]
         anom_val = anomaly_mean[stage]
-        print(f"  • {stage}: Anomaly Avg = {anom_val:.3f} | Normal Avg = {norm_val:.3f} (Z-Score: {z:.2f})")
+        print(f"  - {stage}: Anomaly Avg = {anom_val:.3f} | Normal Avg = {norm_val:.3f} (Z-Score: {z:.2f})")
 
 def create_wide_intra(intra_df, val_col):
     """Pivots multiple intra-stage metrics and suffixes columns to prevent overlap."""
 
-    intra_metrics = [f'{val_col}_std', f'{val_col}_auc', f'{val_col}_stability', f'{val_col}_init_slope']
+    intra_metrics = [
+        f'{val_col}_std', 
+        f'{val_col}_total_variation', 
+        f'{val_col}_overall_slope', 
+        f'{val_col}_net_change',
+        f'{val_col}_mean',
+        f'{val_col}_min',
+        f'{val_col}_max'
+    ]
+
     wide_list = []
     
     for metric in intra_metrics:
@@ -357,7 +366,9 @@ def analyse_cross_stage_split(pel_df, immob_df, split_name, pel_outliers=None, i
 
     channel_mapping = {
         'quad_ch1': 'Ch1', 'channel1': 'Ch1',
-        'quad_ch2': 'Ch2', 'channel2': 'Ch2'
+        'quad_ch2': 'Ch2', 'channel2': 'Ch2',
+        'quad_ch1_change': 'Ch1', 'channel1_change': 'Ch1',
+        'quad_ch2_change': 'Ch2', 'channel2_change': 'Ch2'
     }
 
     if isinstance(pel_copy.index, pd.MultiIndex) and 'Channel' in pel_copy.index.names:
@@ -584,7 +595,9 @@ def cross_stage_correlations(pel_df, immob_df, split_name, sc_metrics_df=None, t
 
     channel_mapping = {
         'quad_ch1': 'Ch1', 'channel1': 'Ch1',
-        'quad_ch2': 'Ch2', 'channel2': 'Ch2'
+        'quad_ch2': 'Ch2', 'channel2': 'Ch2',
+        'quad_ch1_change': 'Ch1', 'channel1_change': 'Ch1',
+        'quad_ch2_change': 'Ch2', 'channel2_change': 'Ch2'
     }
     
     if isinstance(pel_copy.index, pd.MultiIndex) and 'Channel' in pel_copy.index.names:
@@ -662,17 +675,19 @@ def create_interactive_dashboard(data_catalog):
 
         mode = mode_toggle.value
         x_src, y_src = x_source_drop.value, y_source_drop.value
-        x_cols = list(data_catalog[mode][x_src]['Channel 1'].columns)
-        y_cols = list(data_catalog[mode][y_src]['Channel 1'].columns)
+        
+        x_cols = list(data_catalog[mode][x_src].columns)
+        y_cols = list(data_catalog[mode][y_src].columns)
         
         x_col_drop.options = x_cols
 
         if x_col_drop.value not in x_cols: 
+
             x_col_drop.value = x_cols[0] if x_cols else None
             
         y_col_drop.options = y_cols
-
         if y_col_drop.value not in y_cols: 
+
             y_col_drop.value = y_cols[0] if y_cols else None
             
     mode_toggle.observe(update_dropdowns, 'value')
@@ -680,14 +695,43 @@ def create_interactive_dashboard(data_catalog):
     y_source_drop.observe(update_dropdowns, 'value')
     update_dropdowns()
     
-    def get_joined_data(mode, x_src, y_src, x_col, y_col, channel):
+    def get_joined_data(mode, x_src, y_src, x_col, y_col, channel_label):
 
-        x_ch = channel if channel in data_catalog[mode][x_src] else 'Channel 1'
-        y_ch = channel if channel in data_catalog[mode][y_src] else 'Channel 1'
+        df_x = data_catalog[mode][x_src].copy()
+        df_y = data_catalog[mode][y_src].copy()
         
-        df_x = data_catalog[mode][x_src][x_ch].copy()
-        df_y = data_catalog[mode][y_src][y_ch].copy()
+        def slice_channel(df, ch_label):
+
+            target_ch = 'Ch1' if ch_label == 'Channel 1' else 'Ch2'
+
+            if isinstance(df.index, pd.MultiIndex) and 'Channel' in df.index.names:
+                
+                ch_map = {
+                    'quad_ch1': 'Ch1', 
+                    'channel1': 'Ch1', 
+                    'quad_ch2': 'Ch2', 
+                    'channel2': 'Ch2',
+                    'quad_ch1_change': 'Ch1', 
+                    'channel1_change': 'Ch1',
+                    'quad_ch2_change': 'Ch2', 
+                    'channel2_change': 'Ch2'
+                }
+
+                df = df.rename(index=ch_map, level='Channel')
+                
+                if target_ch in df.index.get_level_values('Channel'):
+                    return df.xs(target_ch, level='Channel')
+                else:
+                    return pd.DataFrame()
+                
+            return df
+
+        df_x = slice_channel(df_x, channel_label)
+        df_y = slice_channel(df_y, channel_label)
         
+        if df_x.empty or df_y.empty:
+            return pd.DataFrame()
+
         df_x.columns = df_x.columns.astype(str)
         df_y.columns = df_y.columns.astype(str)
         x_col_str, y_col_str = str(x_col), str(y_col)
@@ -713,6 +757,7 @@ def create_interactive_dashboard(data_catalog):
             if not x_col or not y_col:
 
                 print("Please select valid metrics to plot.")
+
                 return
                 
             fig = go.Figure()
@@ -731,7 +776,6 @@ def create_interactive_dashboard(data_catalog):
                     continue
 
                 plotted_any = True
-
                 x_data, y_data = plot_df['x_val'], plot_df['y_val']
                 
                 fig.add_trace(go.Scatter(x=x_data, y=y_data, mode='markers', name=f'{ch}', marker=dict(size=8, opacity=0.7, color=colors[ch], line=dict(width=1, color='DarkSlateGrey')), text=plot_df.index, hovertemplate="Chip ID: %{text}<br>X: %{x:.4f}<br>Y: %{y:.4f}<extra></extra>"))
@@ -746,6 +790,7 @@ def create_interactive_dashboard(data_catalog):
             if not plotted_any:
 
                 print("Not enough matching chip records to plot these selections.")
+
                 return
                 
             title = f"{y_src} [{y_col}] vs {x_src} [{x_col}]"
@@ -767,27 +812,41 @@ def create_interactive_dashboard(data_catalog):
 
 def get_top_drivers(df, chip_id, top_n=3):
 
-    if chip_id not in df.index: 
-        return ["N/A (Chip not in dataset)"]
-    
     mean = df.mean()
     std = df.std().replace(0, 1e-9)
-    z_scores = ((df.loc[chip_id] - mean) / std).abs().dropna()
-
-    if z_scores.empty: 
-        return ["N/A"]
     
-    top_stages = z_scores.sort_values(ascending=False).head(top_n)
+    if isinstance(df.index, pd.MultiIndex):
 
-    return [f"{stage} (Z: {z:.1f})" for stage, z in top_stages.items()]
+        if chip_id not in df.index.get_level_values('chip_id'): 
+            return ["N/A (Chip not in dataset)"]
+        
+        chip_rows = df.xs(chip_id, level='chip_id')
+        drivers = []
 
-def prepare_section(df, stage_col, val_col):
+        for ch, row in chip_rows.iterrows():
 
-    pivoted = pivot_chip_data(df, stage_col, val_col)
-    anomalies = detect_anomalies(pivoted, pivoted.columns.tolist(), contamination=0.05)
-    outliers = anomalies[anomalies['anomaly'] == -1].index.tolist() if not anomalies.empty else []
+            z_scores = ((row - mean) / std).abs().dropna()
 
-    return pivoted, outliers
+            if not z_scores.empty:
+
+                top_stages = z_scores.sort_values(ascending=False).head(top_n)
+                top_str = " | ".join([f"{stage} (Z: {z:.1f})" for stage, z in top_stages.items()])
+                drivers.append(f"[{ch}] {top_str}")
+
+        return drivers
+    else:
+
+        if chip_id not in df.index: 
+            return ["N/A (Chip not in dataset)"]
+        
+        z_scores = ((df.loc[chip_id] - mean) / std).abs().dropna()
+
+        if z_scores.empty: 
+            return ["N/A"]
+        
+        top_stages = z_scores.sort_values(ascending=False).head(top_n)
+
+        return [f"{stage} (Z: {z:.1f})" for stage, z in top_stages.items()]
 
 def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips, section_config, title="Overall At-Risk Chips Summary"):
     """
@@ -801,7 +860,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
     immob_unique = set()
     immob_breakdown = {}
     
-    for section_name, (df_source, outliers) in section_config.items():
+    for section_name, (_, outliers) in section_config.items():
 
         if "PEL" in section_name:
 
@@ -821,8 +880,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
     if sc_metrics is not None and not sc_metrics.empty and 'r2' in sc_metrics.columns:
         sc_fails = set(sc_metrics[sc_metrics['r2'] < 0.95].index)
         
-    combined_all_fails = set(all_at_risk_chips).union(pel_unique).union(immob_unique).union(sc_fails)
-    combined_all_fails = sorted(list(combined_all_fails))
+    combined_all_fails = sorted(list(set(all_at_risk_chips).union(pel_unique, immob_unique, sc_fails)))
 
     with collapsible_output(f"{title} - Overall Summary"):
 
@@ -843,13 +901,8 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
 
         if pel_unique:
 
-            print(f"Chip IDs: {', '.join(map(str, sorted(list(pel_unique))))}\n")
-            print("Where they came from (Channel & Metric)")
-
             for sec_name, out_list in pel_breakdown.items():
-                print(f"  • {sec_name}: {len(out_list)} chips ({', '.join(map(str, out_list))})")
-        else:
-            print("No anomalies detected in the PEL stage.")
+                print(f"  - {sec_name}: {len(out_list)} chips ({', '.join(map(str, out_list))})")
 
     with collapsible_output(f"{title} - Immobilisation Breakdown"):
 
@@ -857,31 +910,21 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
 
         if immob_unique:
 
-            print(f"Chip IDs: {', '.join(map(str, sorted(list(immob_unique))))}\n")
-            print("Where they came from (Split, Channel & Metric)")
-
             for sec_name, out_list in immob_breakdown.items():
-                print(f"  • {sec_name}: {len(out_list)} chips ({', '.join(map(str, out_list))})")
-        else:
-            print("No anomalies detected in the Immobilisation stage.")
+                print(f"  - {sec_name}: {len(out_list)} chips ({', '.join(map(str, out_list))})")
 
     with collapsible_output(f"{title} - Standard Curve Breakdown"):
 
         print(f"Total Unique Standard Curve Faulty Chips: {len(sc_fails)}")
 
-        if sc_fails:
-            print(f"Chip IDs (R² < 0.95): {', '.join(map(str, sorted(list(sc_fails))))}")
-        else:
-            print("No Standard Curve anomalies detected (All R² >= 0.95).")
+        if sc_fails: 
+            print(f"Chip IDs (R^2 < 0.95): {', '.join(map(str, sorted(list(sc_fails))))}")
 
     with collapsible_output(f"{title} - Chip Profiles"):
 
-        if master_df.empty:
-            print("Cannot generate detailed summary: Master dataframe is empty (no overlapping chips).")
-            return
-            
-        if not combined_all_fails:
-            print("No faulty chips to display profiles for.")
+        if master_df.empty or not combined_all_fails:
+
+            print("No detailed profiles available.")
             return
 
         features = master_df.columns.tolist()
@@ -903,8 +946,13 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
         chip_summaries = {}
 
         for chip in combined_all_fails:
+            
+            if chip in master_df.index.get_level_values('chip_id'):
 
-            cluster_profile = master_df.loc[chip, 'Cluster'] if chip in master_df.index else "N/A (Incomplete Stage Data)"
+                chip_clusters = master_df.xs(chip, level='chip_id')['Cluster'].to_dict()
+                cluster_profile = " | ".join([f"{ch}: Cluster {cl}" for ch, cl in chip_clusters.items()])
+            else:
+                cluster_profile = "N/A (Incomplete Stage Data)"
                 
             sc_rows = sc_metrics[sc_metrics.index == chip].copy()
 
@@ -912,10 +960,12 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
                 sc_rows = sc_rows.merge(sc_raw_df[cols_to_merge], on='standard_curve_uuid', how='left')
             
             detailed_flags = []
+
             if not sc_rows.empty and (sc_rows['r2'] < 0.95).any():
-                detailed_flags.append("Standard Curve (R² < 0.95) [Channel 1 Only]")
+                detailed_flags.append("Standard Curve (R² < 0.95)")
                 
             drivers_info = {}
+
             for section_name, (df_source, outlier_list) in section_config.items():
 
                 if chip in outlier_list:
@@ -923,6 +973,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
                     drivers_info[section_name] = get_top_drivers(df_source, chip)
             
             sc_data = []
+
             if not sc_rows.empty:
 
                 for _, sc_row in sc_rows.iterrows():
@@ -930,18 +981,16 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
                     r2_val = sc_row['r2']
                     d_str = str(sc_row[date_col]).strip() if date_col and pd.notna(sc_row[date_col]) else ""
                     t_str = str(sc_row[time_col]).strip().replace('-', ':') if time_col and pd.notna(sc_row[time_col]) else ""
-                    datetime_str = f"{d_str} {t_str}".strip()
-                    
                     sc_data.append({
-                        "Date/Time": datetime_str if datetime_str else "Unknown",
+                        "Date/Time": f"{d_str} {t_str}".strip() or "Unknown",
                         "Curve UUID": sc_row['standard_curve_uuid'],
                         "Fit Model": sc_row['fit_model'],
                         "R² Score": r2_val,
                         "Status": "FAILED" if r2_val < 0.95 else "PASSED"
                     })
-                    
-            sc_df = pd.DataFrame(sc_data)
 
+            sc_df = pd.DataFrame(sc_data)
+            
             if not sc_df.empty and "Date/Time" in sc_df.columns:
 
                 sc_df["Parsed_DateTime"] = pd.to_datetime(sc_df["Date/Time"], errors='coerce')
@@ -954,42 +1003,44 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
                 "SC_DF": sc_df
             }
 
-        if chip_summaries:
+        def style_status(val):
+        
+            if val == 'FAILED': 
+                return 'color: red; font-weight: bold;'
 
-            def style_status(val):
+            if val == 'PASSED': 
+                return 'color: green;'
 
-                if val == 'FAILED': 
-                    return 'color: red; font-weight: bold;'
+            return ''
+        
+        for chip, info in chip_summaries.items():
 
-                if val == 'PASSED': 
-                    return 'color: green;'
-
-                return ''
+            print("=" * 80)
+            print(f"CHIP ID: {chip}")
+            print(f"Cluster Profile: {info['Cluster']}")
             
-            for chip, info in chip_summaries.items():
+            flag_str = "\n    - ".join(info['Flagged By']) if info['Flagged By'] else "None (Manual Review)"
+            print(f"Flagged By Anomaly In:\n    - {flag_str}")
+            
+            if info['Drivers']:
 
-                print("=" * 80)
-                print(f"CHIP ID: {chip}")
-                print(f"Cluster Profile: {info['Cluster']}")
+                print("\nTop 3 Divergent Regions for Triggered Sections:")
+
+                for section, drivers in info['Drivers'].items():
+
+                    print(f"\n  - {section}:")
+
+                    for d in drivers: 
+                        print(f"      {d}")
+
+            print("-" * 80)
+            
+            if not info['SC_DF'].empty:
+
+                styled_df = info['SC_DF'].style.format({"R² Score": "{:.4f}"}).set_properties(**{'text-align': 'left', 'white-space': 'nowrap'}).set_table_styles([dict(selector='th', props=[('text-align', 'left')])]).map(style_status, subset=['Status'])
+
+                display(styled_df)
+            else:
+                print("No Standard Curve data available for this chip.")
                 
-                flag_str = "\n    - ".join(info['Flagged By']) if info['Flagged By'] else "None (Manual Review)"
-                print(f"Flagged By Anomaly In:\n    - {flag_str}")
-                
-                if info['Drivers']:
-
-                    print("\nTop 3 Divergent Regions for Triggered Sections:")
-
-                    for section, drivers in info['Drivers'].items():
-                        print(f"  • {section}: {' | '.join(drivers)}")
-
-                print("-" * 80)
-                
-                if not info['SC_DF'].empty:
-
-                    styled_df = info['SC_DF'].style.format({"R² Score": "{:.4f}"}).set_properties(**{'text-align': 'left', 'white-space': 'nowrap'}).set_table_styles([dict(selector='th', props=[('text-align', 'left')])]).map(style_status, subset=['Status'])
-
-                    display(styled_df)
-                else:
-                    print("No Standard Curve data available for this chip.")
-                    
-                print("\n")
+            print("\n")
