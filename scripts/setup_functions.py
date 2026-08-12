@@ -13,7 +13,7 @@ import ipywidgets as widgets
 
 # Data Quality & Visualisation
 def check_data_quality(dfs_dict, stage_name):
-    """Prints missing values, duplicates, and summary stats for generic sensorgrams."""
+    '''Prints missing values, duplicates, and summary stats for generic sensorgrams.'''
 
     for name, df in dfs_dict.items():
         
@@ -31,7 +31,7 @@ def check_data_quality(dfs_dict, stage_name):
             display(df[chip].tail())
 
 def plot_sensorgrams(dfs_dict, stage_name):
-    """Plots raw sensorgrams dynamically finding time and channel columns."""
+    '''Plots raw sensorgrams dynamically finding time and channel columns.'''
 
     for name, df in dfs_dict.items():
 
@@ -50,7 +50,7 @@ def plot_sensorgrams(dfs_dict, stage_name):
         plt.show()
 
 def plot_flags_on_sensorgrams(df_sens, times, labels, title, colours=None):
-    """Overlays vertical flag lines and text on a generic sensorgram."""
+    '''Overlays vertical flag lines and text on a generic sensorgram.'''
 
     time_col = df_sens.columns[0]
     channels = df_sens.columns.tolist()[1:]
@@ -74,7 +74,7 @@ def plot_flags_on_sensorgrams(df_sens, times, labels, title, colours=None):
     plt.show()
 
 def plot_5s_averaged_windows(sens, avg_flags, title_id):
-    """Helper specific to Immob to plot avg windows."""
+    '''Helper specific to Immob to plot avg windows.'''
 
     time_col = sens.columns[0]
     channels = sens.columns.tolist()[1:]
@@ -91,29 +91,29 @@ def plot_5s_averaged_windows(sens, avg_flags, title_id):
         
         t_flag = (float(w_start) + float(w_end)) / 2
         avg_val = row.get(f'{channels[0]}_avg', 0)
-        plt.text(t_flag, avg_val, f" {row['information']} ({row['Window_Label']})", fontsize=8, verticalalignment='bottom', rotation=15, color='darkred')
+        plt.text(t_flag, avg_val, f' {row['information']} ({row['Window_Label']})', fontsize=8, verticalalignment='bottom', rotation=15, color='darkred')
                  
-    plt.title(f"Averaging Windows: {title_id}")
-    plt.xlabel("Time (s)")
-    plt.ylabel("Signal")
+    plt.title(f'Averaging Windows: {title_id}')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Signal')
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.show()
 
 def plot_all_statistics(df, x_col, y_col, ylabel='Signal', title_prefix=''):
-    """
+    '''
     Generates Box, Violin, Density, Correlation, and Heatmap plots 
     sequentially for a sensorgram stage metrics or changes dataframe.
-    """
+    '''
     
-    title_prefix = f"{title_prefix} - " if title_prefix else ""
+    title_prefix = f'{title_prefix} - ' if title_prefix else ''
     
     plt.figure(figsize=(10, 6))
     sns.boxplot(data=df, x=x_col, y=y_col)
     sns.stripplot(data=df, x=x_col, y=y_col, color='black', alpha=0.5, jitter=False)
     plt.xticks(rotation=90)
     plt.ylabel(ylabel)
-    plt.title(f"{title_prefix}Stage Boxplot & Stripplot")
+    plt.title(f'{title_prefix}Stage Boxplot & Stripplot')
     plt.tight_layout()
     plt.show()
     plt.close()
@@ -122,7 +122,7 @@ def plot_all_statistics(df, x_col, y_col, ylabel='Signal', title_prefix=''):
     sns.violinplot(data=df, x=x_col, y=y_col, palette='muted')
     plt.xticks(rotation=45)
     plt.ylabel(ylabel)
-    plt.title(f"{title_prefix}Stage Violin Plot")
+    plt.title(f'{title_prefix}Stage Violin Plot')
     plt.tight_layout()
     plt.show()
     plt.close()
@@ -130,7 +130,7 @@ def plot_all_statistics(df, x_col, y_col, ylabel='Signal', title_prefix=''):
     plt.figure(figsize=(10, 6))
     sns.kdeplot(data=df, x=y_col, hue=x_col, fill=True, common_norm=False, alpha=0.3)
     plt.xlabel(ylabel)
-    plt.title(f"{title_prefix}Signal Density Profiles Per Stage")
+    plt.title(f'{title_prefix}Signal Density Profiles Per Stage')
     plt.tight_layout()
     plt.show()
     plt.close()
@@ -141,7 +141,7 @@ def plot_all_statistics(df, x_col, y_col, ylabel='Signal', title_prefix=''):
     if not corr_matrix.empty:
 
         sns.heatmap(corr_matrix, annot=False, cmap='coolwarm', fmt='.2f', vmin=-1, vmax=1)
-        plt.title(f"{title_prefix}Channel & Time Correlation Matrix")
+        plt.title(f'{title_prefix}Channel & Time Correlation Matrix')
         plt.tight_layout()
         plt.show()
 
@@ -157,14 +157,14 @@ def plot_all_statistics(df, x_col, y_col, ylabel='Signal', title_prefix=''):
         plt.xticks(rotation=45)
         plt.ylabel('Chip ID')
         plt.xlabel('Experimental Stage')
-        plt.title(f"{title_prefix}Overview Heatmap (Mean Value per Chip per Stage)")
+        plt.title(f'{title_prefix}Overview Heatmap (Mean Value per Chip per Stage)')
         plt.tight_layout()
         plt.show()
         plt.close()
 
 # Data Processing & Feature Extraction
 def build_stage_summary(df, group_col, val_cols):
-    """Builds statistical summaries mapping over given channel columns."""
+    '''Builds statistical summaries mapping over given channel columns.'''
 
     summary = df.groupby(group_col, observed=True).agg(
         n=('chip_id', 'count'),
@@ -192,7 +192,7 @@ def build_stage_summary(df, group_col, val_cols):
 
         for stat in stat_suffixes:
 
-            col_name = f"{col}_{stat}"
+            col_name = f'{col}_{stat}'
 
             if col_name in summary.columns:
                 ordered_cols.append(col_name)
@@ -210,17 +210,17 @@ def add_stage_changes(event_table, channels):
     for ch in channels:
         event_table[f'{ch}_change'] = event_table[ch].diff()
 
-    event_table['stage'] = event_table['stage'].shift(1) + " -> " + event_table['stage']
+    event_table['stage'] = event_table['stage'].shift(1) + ' -> ' + event_table['stage']
 
     event_table = event_table.iloc[1:].reset_index(drop=True)
 
     return event_table
 
 def extract_flags_from_pushes(flag_df):
-    """
+    '''
     Parses a flag dataframe to extract Buffers, Reagents, and their Plateaus 
     based on the syringe push event sequences.
-    """
+    '''
 
     df = flag_df.copy().sort_values(by='time').reset_index(drop=True)
     
@@ -243,7 +243,7 @@ def extract_flags_from_pushes(flag_df):
         if idx + 1 < len(df):
 
             plateau_time = df.loc[idx + 1, 'time']
-            new_records.append({'time': plateau_time, 'information': f"{reagent_name} - Plateau"})
+            new_records.append({'time': plateau_time, 'information': f'{reagent_name} - Plateau'})
             last_reagent_plateau_time = max(last_reagent_plateau_time, plateau_time)
 
     push_df = df[is_push].copy()
@@ -355,12 +355,12 @@ def calculate_baseline_peaks(time, reagent_flags):
             
             closest_idx = np.argmin(np.abs(time - target_time))
             
-            baseline_records.append({"time": time[closest_idx], "information": f"Baseline ({stage1_raw})"})
+            baseline_records.append({'time': time[closest_idx], 'information': f'Baseline ({stage1_raw})'})
                     
     return baseline_records
 
 def update_immob_flags(immob_df, immobilisation_dfs, flags_dfs, flags_dir='data/buckets/AMF_FLAGS'):
-    """Calculates and writes Buffer, Peak, Baseline, and Flat flags."""
+    '''Calculates and writes Buffer, Peak, Baseline, and Flat flags.'''
 
     os.makedirs(flags_dir, exist_ok=True)
     
@@ -377,7 +377,7 @@ def update_immob_flags(immob_df, immobilisation_dfs, flags_dfs, flags_dir='data/
         if flag_data['information'].str.contains('Buffer 1', na=False).any():
             continue
 
-        print(f"Processing: {filename}")
+        print(f'Processing: {filename}')
 
         plot_data = immobilisation_dfs[immob_data['refPoly4']]
         time_array = plot_data['time'].sort_values().values
@@ -429,10 +429,10 @@ def update_immob_flags(immob_df, immobilisation_dfs, flags_dfs, flags_dir='data/
                 else:
                     final_records.append({'time': time_array[max(0, len(time_array) - 40)], 'information': 'Final'})
                     
-        boundary_list = [{"time": start_time, "information": "Start"}]
+        boundary_list = [{'time': start_time, 'information': 'Start'}]
 
         if has_buffer_3_plateau:
-            boundary_list.append({"time": finish_time, "information": "Finish"})
+            boundary_list.append({'time': finish_time, 'information': 'Finish'})
             
         boundary_records = pd.DataFrame(boundary_list)
         all_new_records = pd.concat([boundary_records, parsed_flags_df, pd.DataFrame(initial_records + final_records)], ignore_index=True)
@@ -442,7 +442,7 @@ def update_immob_flags(immob_df, immobilisation_dfs, flags_dfs, flags_dir='data/
         baseline_list = calculate_baseline_peaks(time_array, baseline_flags)
         
         updated_df = pd.concat([updated_df, pd.DataFrame(baseline_list)], ignore_index=True)
-        updated_df = updated_df.drop_duplicates(subset=["time", "information"], keep="first").sort_values("time").reset_index(drop=True)
+        updated_df = updated_df.drop_duplicates(subset=['time', 'information'], keep='first').sort_values('time').reset_index(drop=True)
         
         updated_df.to_csv(file_path, index=False)
         flags_dfs[filename] = updated_df.copy()
@@ -450,7 +450,7 @@ def update_immob_flags(immob_df, immobilisation_dfs, flags_dfs, flags_dir='data/
     return flags_dfs
 
 def calculate_5s_averages(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_dfs, avg_dir='data/buckets/averaged_flags'):
-    """Calculates 5-second averages for flags dynamically across all channels."""
+    '''Calculates 5-second averages for flags dynamically across all channels.'''
 
     os.makedirs(avg_dir, exist_ok=True)
     
@@ -493,7 +493,7 @@ def calculate_5s_averages(immob_df, immobilisation_dfs, flags_dfs, averaged_flag
 
                 window_starts.append(t_flag)
                 window_ends.append(t_flag)
-                window_labels.append("Start")
+                window_labels.append('Start')
                 continue
 
             elif 'finish' in info:
@@ -503,7 +503,7 @@ def calculate_5s_averages(immob_df, immobilisation_dfs, flags_dfs, averaged_flag
                 
                 window_starts.append(sensor_time[-1])
                 window_ends.append(sensor_time[-1])
-                window_labels.append("Finish")
+                window_labels.append('Finish')
                 continue
                 
             t_prev = flag_data.iloc[idx - 1]['time'] if idx > 0 else -np.inf
@@ -520,28 +520,28 @@ def calculate_5s_averages(immob_df, immobilisation_dfs, flags_dfs, averaged_flag
 
                 if t_flag - 5 >= t_prev + 2:
                     t_start, t_end = t_flag - 5, t_flag
-                    w_label = "Prev 5s"
+                    w_label = 'Prev 5s'
                 else:
                     t_start, t_end = t_prev + 2, t_flag
-                    w_label = "Fallback"
+                    w_label = 'Fallback'
 
             elif is_baseline:
 
                 if t_flag + 5 <= t_next:
                     t_start, t_end = t_flag, t_flag + 5
-                    w_label = "Next 5s"
+                    w_label = 'Next 5s'
             
                 elif (t_flag - 2.5 >= t_prev + 2) and (t_flag + 2.5 <= t_next):
                     t_start, t_end = t_flag - 2.5, t_flag + 2.5
-                    w_label = "Split 2.5s"
+                    w_label = 'Split 2.5s'
 
                 elif t_flag - 5 >= t_prev + 2:
                     t_start, t_end = t_flag - 5, t_flag
-                    w_label = "Prev 5s"
+                    w_label = 'Prev 5s'
 
                 else:
                     t_start, t_end = t_prev + 2, t_next - 0.1
-                    w_label = "Gap Fallback"
+                    w_label = 'Gap Fallback'
             
             if t_start is not None and t_end > t_start:
 
@@ -560,7 +560,7 @@ def calculate_5s_averages(immob_df, immobilisation_dfs, flags_dfs, averaged_flag
 
                 window_starts.append(np.nan)
                 window_ends.append(np.nan)
-                window_labels.append("")
+                window_labels.append('')
 
         for col, data_list in avg_data.items(): 
             flag_data[col] = data_list
@@ -576,7 +576,7 @@ def calculate_5s_averages(immob_df, immobilisation_dfs, flags_dfs, averaged_flag
     return averaged_flags_dfs
 
 def collapse_combined_reagents(event_df):
-    """Collapses consecutive identical stages (ignoring buffers) and normalizes names while preserving original case."""
+    '''Collapses consecutive identical stages (ignoring buffers) and normalizes names while preserving original case.'''
 
     df = event_df.copy()
 
@@ -621,7 +621,7 @@ def collapse_combined_reagents(event_df):
     for orig_name, comp_name in zip(collapsed['base_stage'], collapsed['compare_stage']):
 
         counts[comp_name] = counts.get(comp_name, 0) + 1
-        unique_stages.append(orig_name if counts[comp_name] == 1 else f"{orig_name}_{counts[comp_name]}")
+        unique_stages.append(orig_name if counts[comp_name] == 1 else f'{orig_name}_{counts[comp_name]}')
         
     collapsed['stage'] = unique_stages
     
@@ -630,7 +630,7 @@ def collapse_combined_reagents(event_df):
     return collapsed
 
 def calculate_custom_immob_changes(event_df, channels):
-    """Calculates standard stage-to-stage diffs and clean custom baseline metrics."""
+    '''Calculates standard stage-to-stage diffs and clean custom baseline metrics.'''
 
     df = add_stage_changes(event_df.copy(), channels)
     
@@ -649,7 +649,7 @@ def calculate_custom_immob_changes(event_df, channels):
             
             prev_b, curr_b = baselines.iloc[i-1], baselines.iloc[i]
 
-            stage_name = f"Net_Shift_{prev_b['stage']}_to_{curr_b['stage']}"
+            stage_name = f'Net_Shift_{prev_b['stage']}_to_{curr_b['stage']}'
             
             metric = {'stage': stage_name, 'time': curr_b['time'], 'chip_id': chip_id, 'base_stage': prev_b['stage']}
 
@@ -670,7 +670,7 @@ def calculate_custom_immob_changes(event_df, channels):
 
 def pool_channel_metrics(df, cols_to_pool, value_name='Signal', cols_to_drop=None):
 
-    """Melts the dataframe to combine interchangeable channels into a single column, preserving chronological stage order."""
+    '''Melts the dataframe to combine interchangeable channels into a single column, preserving chronological stage order.'''
 
     df_clean = df.drop(columns=cols_to_drop) if cols_to_drop else df.copy()
     
@@ -690,15 +690,21 @@ def pool_channel_metrics(df, cols_to_pool, value_name='Signal', cols_to_drop=Non
     return pooled.dropna(subset=[value_name]).reset_index(drop=True)
 
 def normalise_by_initial_flag(df, channels, drop_start=True):
-    """
-    Zero-bases channel values using the 'Initial' or 'Start' stage flag.
+
+    '''
+    Zero-bases channel values using the 'Initial' stage flag if present.
+    Falls back to 'Start' or the first available row if 'Initial' is missing.
     'Initial' is NEVER dropped. 'Start' is dropped only if drop_start=True.
-    """
+    '''
 
     df_norm = df.copy()
     
-    is_ref = df_norm['stage'].isin(['Start', 'Initial'])
-    idx = is_ref.idxmax() if is_ref.any() else df_norm.index[0]
+    if (df_norm['stage'] == 'Initial').any():
+        idx = df_norm[df_norm['stage'] == 'Initial'].index[0]
+    elif (df_norm['stage'] == 'Start').any():
+        idx = df_norm[df_norm['stage'] == 'Start'].index[0]
+    else:
+        idx = df_norm.index[0]
         
     for ch in channels:
         initial_val = df_norm.loc[idx, ch]
@@ -710,29 +716,28 @@ def normalise_by_initial_flag(df, channels, drop_start=True):
     return df_norm
 
 def extract_intrastage_features(sens_df, event_df, channels, chip_id):
-    """
+    '''
     Slices raw sensorgram data between consecutive stage flags and extracts 
     kinetic and statistical intra-stage features for anomaly detection.
-    """
+    '''
 
     time_col = sens_df.columns[0]
     sens_time = sens_df[time_col].values
     features_list = []
+
     events = event_df.sort_values('time').reset_index(drop=True)
     
     for i in range(len(events) - 1):
 
         start_time = events.loc[i, 'time']
         end_time = events.loc[i + 1, 'time']
-        stage_transition = f"{events.loc[i, 'stage']} -> {events.loc[i+1, 'stage']}"
+        stage_transition = f'{events.loc[i, 'stage']} -> {events.loc[i+1, 'stage']}'
         
         mask = (sens_time >= start_time) & (sens_time < end_time)
         stage_data = sens_df[mask]
         
         if stage_data.empty:
             continue
-            
-        stage_time = stage_data[time_col].values
         
         row_features = {
             'chip_id': chip_id,
@@ -742,32 +747,32 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
         for ch in channels:
 
             signal = stage_data[ch].values
-            
-            if len(signal) == 0:
-                continue
 
-            initial_val = signal[0]
-            final_val = signal[-1]
-            
-            row_features[f"{ch}_initial"] = initial_val
-            row_features[f"{ch}_final"] = final_val
-            row_features[f"{ch}_net_change"] = final_val - initial_val
-            
-            row_features[f"{ch}_mean"] = np.mean(signal)
-            row_features[f"{ch}_min"] = np.min(signal)
-            row_features[f"{ch}_max"] = np.max(signal)
-            
-            row_features[f"{ch}_std"] = np.std(signal)
-            
-            if len(signal) > 1:
+            if len(signal) > 0:
 
-                row_features[f"{ch}_total_variation"] = np.sum(np.abs(np.diff(signal)))
-                
-                slope, _, _, _, _ = linregress(stage_time, signal)
-                row_features[f"{ch}_overall_slope"] = slope
+                row_features[f'{ch}_std'] = np.std(signal)
             else:
-                row_features[f"{ch}_total_variation"] = 0.0
-                row_features[f"{ch}_overall_slope"] = 0.0
+
+                row_features[f'{ch}_std'] = np.nan
+            
+            if len(signal) > 5:
+
+                diffs = np.abs(np.diff(signal))
+                noise_floor = np.percentile(diffs, 90) + 1e-9 
+                row_features[f'{ch}_spike_to_noise_ratio'] = np.max(diffs) / noise_floor
+                
+                w_size = max(15, len(signal) // 10) 
+                trend = pd.Series(signal).rolling(window=w_size, center=True, min_periods=1).median()
+                residuals = np.abs(signal - trend)
+                
+                res_std = np.std(residuals) + 1e-9
+                row_features[f'{ch}_max_residual_zscore'] = np.max(residuals) / res_std
+                
+                row_features[f'{ch}_std'] = np.std(signal)
+            else:
+                row_features[f'{ch}_spike_to_noise_ratio'] = 0.0
+                row_features[f'{ch}_max_residual_zscore'] = 0.0
+                row_features[f'{ch}_std'] = 0.0
                 
         features_list.append(row_features)
         
@@ -812,8 +817,8 @@ class collapsible_output:
         self.out = widgets.Output(layout=widgets.Layout(display='none', margin='10px 0 10px 15px'))
         self.out.add_class('custom-clean-output')
         
-        self.expanded_label = f"[v] {self.title}"
-        self.collapsed_label = f"[>] {self.title}"
+        self.expanded_label = f'[v] {self.title}'
+        self.collapsed_label = f'[>] {self.title}'
         
         self.btn = widgets.Button(description=self.collapsed_label, layout=widgets.Layout(width='auto', border='none', padding='0', margin='0'))
         self.btn.style.button_color = 'transparent'
@@ -835,7 +840,7 @@ class collapsible_output:
     def __enter__(self):
         display(self.container)
         
-        display(HTML("""
+        display(HTML('''
         <style>
             .custom-clean-output, 
             .custom-clean-output .jp-RenderedText, 
@@ -861,7 +866,7 @@ class collapsible_output:
                 box-shadow: none !important;
             }
         </style>
-        """))
+        '''))
         
         self.out.__enter__()
 
@@ -896,12 +901,12 @@ def generate_and_display_summary(data_list, val_cols, title, drop_na_col=None):
 # Core Method Runners
 def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
 
-    qc_output = collapsible_output("Quality Checks")
+    qc_output = collapsible_output('Quality Checks')
 
     with qc_output:
         check_data_quality(sensorgram_dfs, 'PEL')
 
-    plot_output = collapsible_output("Sensorgram Plots")
+    plot_output = collapsible_output('Sensorgram Plots')
 
     with plot_output:
         plot_sensorgrams(sensorgram_dfs, 'PEL')
@@ -913,7 +918,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
     all_intrastage_PEL = []
     all_events_PEL_norm = []
 
-    flag_output = collapsible_output("Sensorgram Flag Plots")
+    flag_output = collapsible_output('Sensorgram Flag Plots')
 
     with flag_output:
 
@@ -945,7 +950,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
             event_df = pd.DataFrame(event_dict)
             all_events_PEL.append(event_df)
 
-            print(f"Raw Metrics for Chip {chip_id}")
+            print(f'Raw Metrics for Chip {chip_id}')
             display(event_df)
 
             change_df = event_df.copy().drop(columns=['chip_id'])
@@ -961,7 +966,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
             }
 
             event_norm_df = event_df.copy()
-            change_norm_df = change_df.copy()
+            sens_norm = sens.copy()
 
             for ch in channels:
 
@@ -973,6 +978,8 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
 
                 event_norm_df[ch] = event_norm_df[ch] - val_initial
 
+                sens_norm[ch] = sens_norm[ch] - val_initial
+
             change_df = pd.concat([change_df, pd.DataFrame([summary_row])], ignore_index=True)
             change_df['chip_id'] = chip_id
             all_changes_PEL.append(change_df)
@@ -981,20 +988,20 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
             
             all_events_PEL_norm.append(event_norm_df)
 
-            print(f"Normalised Metrics for Chip {chip_id}")
+            print(f'Normalised Metrics for Chip {chip_id}')
             display(event_norm_df)
             
-            print(f"Stage Changes for Chip {chip_id}")
+            print(f'Stage Changes for Chip {chip_id}')
             display(change_df)
 
-            intra_df = extract_intrastage_features(sens, event_df, channels, chip_id)
+            intra_df = extract_intrastage_features(sens_norm, event_norm_df, channels, chip_id)
             all_intrastage_PEL.append(intra_df)
 
     all_events_PEL_df = pd.concat(all_events_PEL, ignore_index=True)
     all_events_PEL_df['stage'] = pd.Categorical(all_events_PEL_df['stage'], categories=time_cols, ordered=True)
     summary_PEL = build_stage_summary(all_events_PEL_df, 'stage', channels)
 
-    metrics_output = collapsible_output("PEL Stage Metrics Summary")
+    metrics_output = collapsible_output('PEL Stage Metrics Summary')
 
     with metrics_output:
         display(summary_PEL)
@@ -1004,7 +1011,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
     all_events_PEL_norm_df['stage'] = pd.Categorical(all_events_PEL_norm_df['stage'], categories=norm_time_cols, ordered=True)
     summary_PEL_norm = build_stage_summary(all_events_PEL_norm_df, 'stage', channels)
 
-    norm_metrics_output = collapsible_output("PEL Stage Normalised Metrics Summary")
+    norm_metrics_output = collapsible_output('PEL Stage Normalised Metrics Summary')
 
     with norm_metrics_output:
         display(summary_PEL_norm)
@@ -1016,14 +1023,14 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
     change_PEL_df['stage'] = pd.Categorical(change_PEL_df['stage'], categories=stage_cols_pel, ordered=True)
     change_summary_PEL = build_stage_summary(change_PEL_df, 'stage', [f'{ch}_change' for ch in channels])
 
-    change_output = collapsible_output("PEL Stage Change Metrics Summary")
+    change_output = collapsible_output('PEL Stage Change Metrics Summary')
 
     with change_output:
         display(change_summary_PEL)
 
     for ch in channels:
 
-        stats_output = collapsible_output(f"Statistical Plots ({ch})")
+        stats_output = collapsible_output(f'Statistical Plots ({ch})')
 
         with stats_output:
             plot_all_statistics(all_events_PEL_df, 'stage', ch, ylabel=f'{ch} Signal', title_prefix=f'Absolute - {ch}')
@@ -1035,24 +1042,24 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
     change_cols = [f'{ch}_change' for ch in channels]
     pooled_change_df = pool_channel_metrics(change_PEL_df, cols_to_pool=change_cols, value_name='Delta_Signal', cols_to_drop=channels)
 
-    overall_summary_output = collapsible_output("Overall Pooled Summaries (Normalised & Change)")
+    overall_summary_output = collapsible_output('Overall Pooled Summaries (Normalised & Change)')
 
     with overall_summary_output:
 
-        print("Overall Normalised Metrics Summary")
+        print('Overall Normalised Metrics Summary')
         summary_pooled_norm = build_stage_summary(pooled_norm_df, 'stage', ['Norm_Signal'])
         display(summary_pooled_norm)
         
-        print("\n-Overall Stage Change Metrics Summary")
+        print('\n-Overall Stage Change Metrics Summary')
         summary_pooled_change = build_stage_summary(pooled_change_df, 'stage', ['Delta_Signal'])
         display(summary_pooled_change)
 
-    overall_stats_output = collapsible_output("Statistical Plots (Overall Combined Channels)")
+    overall_stats_output = collapsible_output('Statistical Plots (Overall Combined Channels)')
 
     with overall_stats_output:
 
-        print(f"Pooled Observations (n) across all channels: {len(pooled_norm_df)}")
-        print("Data preview (Grouped by Chip ID):")
+        print(f'Pooled Observations (n) across all channels: {len(pooled_norm_df)}')
+        print('Data preview (Grouped by Chip ID):')
         display(pooled_norm_df.head(6))
         
         plot_all_statistics(pooled_norm_df, x_col='stage', y_col='Norm_Signal', ylabel='Normalised Signal (All Channels)', title_prefix='Overall Pooled Normalised')
@@ -1063,19 +1070,19 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
     if not pel_intra_df.empty:
 
         id_vars = [col for col in ['stage', 'chip_id'] if col in pel_intra_df.columns]
-        suffixes = ['_initial', '_final', '_net_change', '_mean', '_min', '_max', '_std', '_total_variation', '_overall_slope']
+        suffixes = ['_std', '_spike_to_noise_ratio', '_max_residual_zscore']
         melted_chunks = []
         
         for ch in channels:
 
-            ch_cols = [f"{ch}{suff}" for suff in suffixes if f"{ch}{suff}" in pel_intra_df.columns]
+            ch_cols = [f'{ch}{suff}' for suff in suffixes if f'{ch}{suff}' in pel_intra_df.columns]
             
             if not ch_cols:
                 continue
                 
             temp_df = pel_intra_df[id_vars + ch_cols].copy()
             
-            rename_dict = {f"{ch}{suff}": f"pooled_signal{suff}" for suff in suffixes}
+            rename_dict = {f'{ch}{suff}': f'pooled_signal{suff}' for suff in suffixes}
             temp_df = temp_df.rename(columns=rename_dict)
             
             temp_df['Channel'] = ch
@@ -1103,24 +1110,24 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
 
 def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_dfs):
 
-    qc_output = collapsible_output("Quality Checks")
+    qc_output = collapsible_output('Quality Checks')
 
     with qc_output:
         check_data_quality(immobilisation_dfs, 'Immobilisation')
 
-    sensor_output = collapsible_output("Sensorgram Plots")
+    sensor_output = collapsible_output('Sensorgram Plots')
 
     with sensor_output:
         plot_sensorgrams(immobilisation_dfs, 'Immobilisation')
 
-    calc_output = collapsible_output("Flag Calculations")
+    calc_output = collapsible_output('Flag Calculations')
 
     with calc_output:
 
-        print("Calculating and updating buffer, plateau, and baseline flags...")
+        print('Calculating and updating buffer, plateau, and baseline flags...')
         flags_dfs = update_immob_flags(immob_df, immobilisation_dfs, flags_dfs)
 
-        print("Calculating 5-second averages...")
+        print('Calculating 5-second averages...')
 
         averaged_flags_dfs = calculate_5s_averages(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_dfs)
 
@@ -1158,14 +1165,36 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
         event_df = pd.DataFrame(event_dict)
         all_events_imp.append(event_df)
         all_changes_imp.append(calculate_custom_immob_changes(event_df, channels))
-        all_intra_imp.append(extract_intrastage_features(sens, event_df, channels, chip_id))
-        all_events_imp_norm.append(normalise_by_initial_flag(event_df, channels))
+
+        initial_row = event_df[event_df['stage'] == 'Initial']
+        
+        if not initial_row.empty:
+            initial_time = initial_row['time'].iloc[0]
+        else:
+
+            non_start_df = event_df[event_df['stage'] != 'Start']
+            initial_time = non_start_df['time'].iloc[0] if not non_start_df.empty else event_df['time'].iloc[0]
+            initial_row = event_df[event_df['time'] == initial_time]
+
+        sens_norm = sens[sens.iloc[:, 0] >= initial_time].copy()
+        
+        for ch in channels:
+            val_initial = initial_row[ch].iloc[0]
+            sens_norm[ch] = sens_norm[ch] - val_initial
+
+        event_norm_df = normalise_by_initial_flag(event_df, channels)
+        event_norm_df = event_norm_df[event_norm_df['stage'] != 'Start']
+        all_events_imp_norm.append(event_norm_df)
+        all_intra_imp.append(extract_intrastage_features(sens_norm, event_norm_df, channels, chip_id))
 
         comb_df = collapse_combined_reagents(event_df)
         all_events_comb.append(comb_df)
         all_changes_comb.append(calculate_custom_immob_changes(comb_df, channels))
-        all_intra_comb.append(extract_intrastage_features(sens, comb_df, channels, chip_id))
-        all_events_comb_norm.append(normalise_by_initial_flag(comb_df, channels))
+
+        comb_norm_df = normalise_by_initial_flag(comb_df, channels)
+        comb_norm_df = comb_norm_df[comb_norm_df['stage'] != 'Start']
+        all_events_comb_norm.append(comb_norm_df)
+        all_intra_comb.append(extract_intrastage_features(sens_norm, comb_norm_df, channels, chip_id))
 
         if averaged_flags_dfs and immob_data['amfFlags'] in averaged_flags_dfs:
 
@@ -1178,7 +1207,7 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
             }
 
             for ch in channels: 
-                avg_dict[ch] = avg_flags[f"{ch}_avg"].tolist()
+                avg_dict[ch] = avg_flags[f'{ch}_avg'].tolist()
                 
             avg_df = pd.DataFrame(avg_dict)
             all_events_avg_imp.append(avg_df)
@@ -1192,7 +1221,7 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
             all_intra_avg_comb.append(extract_intrastage_features(sens, avg_comb_df, channels, chip_id))
             all_events_avg_comb_norm.append(normalise_by_initial_flag(avg_comb_df, channels, drop_start=False))
 
-    flag_output = collapsible_output("Sensorgram Flag Plots")
+    flag_output = collapsible_output('Sensorgram Flag Plots')
 
     with flag_output:
 
@@ -1207,9 +1236,9 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
             flag_data = flags_dfs[immob_data['amfFlags']]
             flag_data = flag_data[~flag_data.iloc[:, 1].str.contains('Concentration', case=False, na=False)]
             
-            plot_flags_on_sensorgrams(sens, flag_data['time'].tolist(), flag_data['information'].tolist(), title=f'Immob Data: {immob_data["chip_id"]}', colours=['r' if 'Buffer' in str(lbl) else 'k' for lbl in flag_data['information']])
+            plot_flags_on_sensorgrams(sens, flag_data['time'].tolist(), flag_data['information'].tolist(), title=f'Immob Data: {immob_data['chip_id']}', colours=['r' if 'Buffer' in str(lbl) else 'k' for lbl in flag_data['information']])
 
-            print(f"Chip {immob_data['chip_id']} Metrics")
+            print(f'Chip {immob_data['chip_id']} Metrics')
             display(all_events_imp[i])
             display(all_events_imp_norm[i])
             display(all_changes_imp[i])
@@ -1224,7 +1253,7 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
 
     if averaged_flags_dfs:
 
-        avg_output = collapsible_output("Averaged Window Plots")
+        avg_output = collapsible_output('Averaged Window Plots')
 
         with avg_output:
 
@@ -1239,7 +1268,7 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
                 avg_flags = averaged_flags_dfs[immob_data['amfFlags']]
                 plot_5s_averaged_windows(sens, avg_flags, immob_data['chip_id'])
 
-                print(f"Chip {immob_data['chip_id']} (5s Avg) Metrics")
+                print(f'Chip {immob_data['chip_id']} (5s Avg) Metrics')
                 display(all_events_avg_imp[i])
                 display(all_events_avg_imp_norm[i])
                 display(all_changes_avg_imp[i])
@@ -1252,13 +1281,13 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
 
     change_cols = [f'{ch}_change' for ch in channels]
 
-    imp_df = generate_and_display_summary(all_events_imp, channels, "Immediate: Metrics by Stage")
-    imp_norm_df = generate_and_display_summary(all_events_imp_norm, channels, "Immediate: Normalised Metrics by Stage")
-    imp_change_df = generate_and_display_summary(all_changes_imp, change_cols, "Immediate: Stage Changes", drop_na_col=change_cols[0])
+    imp_df = generate_and_display_summary(all_events_imp, channels, 'Immediate: Metrics by Stage')
+    imp_norm_df = generate_and_display_summary(all_events_imp_norm, channels, 'Immediate: Normalised Metrics by Stage')
+    imp_change_df = generate_and_display_summary(all_changes_imp, change_cols, 'Immediate: Stage Changes', drop_na_col=change_cols[0])
     
-    comb_df = generate_and_display_summary(all_events_comb, channels, "Combined Reagents: Metrics by Stage")
-    comb_norm_df = generate_and_display_summary(all_events_comb_norm, channels, "Combined Reagents: Normalised Metrics by Stage")
-    comb_change_df = generate_and_display_summary(all_changes_comb, change_cols, "Combined Reagents: Stage Changes", drop_na_col=change_cols[0])
+    comb_df = generate_and_display_summary(all_events_comb, channels, 'Combined Reagents: Metrics by Stage')
+    comb_norm_df = generate_and_display_summary(all_events_comb_norm, channels, 'Combined Reagents: Normalised Metrics by Stage')
+    comb_change_df = generate_and_display_summary(all_changes_comb, change_cols, 'Combined Reagents: Stage Changes', drop_na_col=change_cols[0])
 
     imp_intra_df = pd.concat(all_intra_imp, ignore_index=True) if all_intra_imp else pd.DataFrame()
     comb_intra_df = pd.concat(all_intra_comb, ignore_index=True) if all_intra_comb else pd.DataFrame()
@@ -1268,20 +1297,20 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
 
     if averaged_flags_dfs:
 
-        avg_imp_df = generate_and_display_summary(all_events_avg_imp, channels, "5s Avg: Metrics by Stage")
-        avg_imp_norm_df = generate_and_display_summary(all_events_avg_imp_norm, channels, "5s Avg: Normalised Metrics by Stage")
-        avg_imp_change_df = generate_and_display_summary(all_changes_avg_imp, change_cols, "5s Avg: Stage Changes", drop_na_col=change_cols[0])
+        avg_imp_df = generate_and_display_summary(all_events_avg_imp, channels, '5s Avg: Metrics by Stage')
+        avg_imp_norm_df = generate_and_display_summary(all_events_avg_imp_norm, channels, '5s Avg: Normalised Metrics by Stage')
+        avg_imp_change_df = generate_and_display_summary(all_changes_avg_imp, change_cols, '5s Avg: Stage Changes', drop_na_col=change_cols[0])
         
-        avg_comb_df = generate_and_display_summary(all_events_avg_comb, channels, "5s Avg Combined Reagents: Metrics by Stage")
-        avg_comb_norm_df = generate_and_display_summary(all_events_avg_comb_norm, channels, "5s Avg Combined Reagents: Normalised Metrics by Stage")
-        avg_comb_change_df = generate_and_display_summary(all_changes_avg_comb, change_cols, "5s Avg Combined Reagents: Stage Changes", drop_na_col=change_cols[0])
+        avg_comb_df = generate_and_display_summary(all_events_avg_comb, channels, '5s Avg Combined Reagents: Metrics by Stage')
+        avg_comb_norm_df = generate_and_display_summary(all_events_avg_comb_norm, channels, '5s Avg Combined Reagents: Normalised Metrics by Stage')
+        avg_comb_change_df = generate_and_display_summary(all_changes_avg_comb, change_cols, '5s Avg Combined Reagents: Stage Changes', drop_na_col=change_cols[0])
 
         avg_imp_intra_df = pd.concat(all_intra_avg_imp, ignore_index=True) if all_intra_avg_imp else pd.DataFrame()
         avg_comb_intra_df = pd.concat(all_intra_avg_comb, ignore_index=True) if all_intra_avg_comb else pd.DataFrame()
 
     for ch in channels:
 
-        stats_output = collapsible_output(f"Statistical Plots ({ch})")
+        stats_output = collapsible_output(f'Statistical Plots ({ch})')
 
         with stats_output:
 
@@ -1303,15 +1332,15 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
                 plot_all_statistics(avg_comb_norm_df, 'stage', ch, ylabel=f'{ch} Norm Signal', title_prefix=f'5s Avg Comb Normalised - {ch}')
                 plot_all_statistics(avg_comb_change_df, 'stage', f'{ch}_change', ylabel=f'Delta {ch}', title_prefix=f'5s Avg Comb Delta - {ch}')
 
-    variants = [("Immediate", all_events_imp_norm, all_changes_imp), ("Combined", all_events_comb_norm, all_changes_comb)]
+    variants = [('Immediate', all_events_imp_norm, all_changes_imp), ('Combined', all_events_comb_norm, all_changes_comb)]
 
     if averaged_flags_dfs:
 
-        variants.extend([("5s Avg", all_events_avg_imp_norm, all_changes_avg_imp), ("5s Avg Combined", all_events_avg_comb_norm, all_changes_avg_comb)])
+        variants.extend([('5s Avg', all_events_avg_imp_norm, all_changes_avg_imp), ('5s Avg Combined', all_events_avg_comb_norm, all_changes_avg_comb)])
 
     pooled_results = {}
 
-    overall_summary_output = collapsible_output("Overall Pooled Summaries (Normalised & Change)")
+    overall_summary_output = collapsible_output('Overall Pooled Summaries (Normalised & Change)')
 
     with overall_summary_output:
 
@@ -1325,21 +1354,21 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
             
             pooled_results[name] = (pooled_norm, pooled_change)
             
-            print(f"\n {name}: Overall Normalised Metrics Summary")
+            print(f'\n {name}: Overall Normalised Metrics Summary')
             display(build_stage_summary(pooled_norm, 'stage', ['Norm_Signal']))
             
-            print(f"\n {name}: Overall Stage Change Metrics Summary")
+            print(f'\n {name}: Overall Stage Change Metrics Summary')
             display(build_stage_summary(pooled_change, 'stage', ['Delta_Signal']))
 
-    overall_stats_output = collapsible_output("Statistical Plots (Overall Combined Channels)")
+    overall_stats_output = collapsible_output('Statistical Plots (Overall Combined Channels)')
 
     with overall_stats_output:
 
         for name, (pooled_norm, pooled_change) in pooled_results.items():
 
-            print(f"\n{'='*20} {name.upper()} {'='*20}")
-            print(f"Pooled Observations (n) across all channels: {len(pooled_norm)}")
-            print("Data preview (Grouped by Chip ID):")
+            print(f'\n{'='*20} {name.upper()} {'='*20}')
+            print(f'Pooled Observations (n) across all channels: {len(pooled_norm)}')
+            print('Data preview (Grouped by Chip ID):')
             display(pooled_norm)
             
             plot_all_statistics(pooled_norm, x_col='stage', y_col='Norm_Signal', ylabel='Normalised Signal (All Channels)', title_prefix=f'{name} Overall Pooled Normalised')
@@ -1351,19 +1380,19 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
             return pd.DataFrame()
         
         id_vars = [col for col in ['stage', 'chip_id'] if col in df.columns]
-        suffixes = ['_initial', '_final', '_net_change', '_mean', '_min', '_max', '_std', '_total_variation', '_overall_slope']
+        suffixes = ['_std', '_spike_to_noise_ratio', '_max_residual_zscore']
         melted_chunks = []
         
         for ch in channels_list:
             
-            ch_cols = [f"{ch}{suff}" for suff in suffixes if f"{ch}{suff}" in df.columns]
+            ch_cols = [f'{ch}{suff}' for suff in suffixes if f'{ch}{suff}' in df.columns]
             
             if not ch_cols:
                 continue
                 
             temp_df = df[id_vars + ch_cols].copy()
             
-            rename_dict = {f"{ch}{suff}": f"pooled_signal{suff}" for suff in suffixes}
+            rename_dict = {f'{ch}{suff}': f'pooled_signal{suff}' for suff in suffixes}
             temp_df = temp_df.rename(columns=rename_dict)
             
             temp_df['Channel'] = ch
@@ -1392,15 +1421,15 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
     avg_imp_intra_pooled = pool_intra_df(avg_imp_intra_df, channels)
     avg_comb_intra_pooled = pool_intra_df(avg_comb_intra_df, channels)
 
-    return (imp_df, imp_change_df, imp_intra_df, imp_norm_df, pooled_results["Immediate"][0], pooled_results["Immediate"][1], imp_intra_pooled,
-        comb_df, comb_change_df, comb_intra_df, comb_norm_df, pooled_results["Combined"][0], pooled_results["Combined"][1], comb_intra_pooled,
-        avg_imp_df, avg_imp_change_df, avg_imp_intra_df, avg_imp_norm_df, pooled_results.get("5s Avg", (None, None))[0], pooled_results.get("5s Avg", (None, None))[1], avg_imp_intra_pooled,
-        avg_comb_df, avg_comb_change_df, avg_comb_intra_df, avg_comb_norm_df, pooled_results.get("5s Avg Combined", (None, None))[0], pooled_results.get("5s Avg Combined", (None, None))[1], avg_comb_intra_pooled
+    return (imp_df, imp_change_df, imp_intra_df, imp_norm_df, pooled_results['Immediate'][0], pooled_results['Immediate'][1], imp_intra_pooled,
+        comb_df, comb_change_df, comb_intra_df, comb_norm_df, pooled_results['Combined'][0], pooled_results['Combined'][1], comb_intra_pooled,
+        avg_imp_df, avg_imp_change_df, avg_imp_intra_df, avg_imp_norm_df, pooled_results.get('5s Avg', (None, None))[0], pooled_results.get('5s Avg', (None, None))[1], avg_imp_intra_pooled,
+        avg_comb_df, avg_comb_change_df, avg_comb_intra_df, avg_comb_norm_df, pooled_results.get('5s Avg Combined', (None, None))[0], pooled_results.get('5s Avg Combined', (None, None))[1], avg_comb_intra_pooled
     )
 
 def run_standard_curve_analysis(standard_curves_df):
 
-    qc_output = collapsible_output("Standard Curve Quality Checks")
+    qc_output = collapsible_output('Standard Curve Quality Checks')
 
     with qc_output:
 
@@ -1424,10 +1453,10 @@ def run_standard_curve_analysis(standard_curves_df):
 
             time_str = str(row.time).strip()
 
-            if "-" in time_str and ":" not in time_str:
-                time_str = time_str.replace("-", ":")
+            if '-' in time_str and ':' not in time_str:
+                time_str = time_str.replace('-', ':')
 
-            dt = pd.to_datetime(f"{row.date} {time_str}", format="%Y-%m-%d %H:%M:%S", errors="coerce")
+            dt = pd.to_datetime(f'{row.date} {time_str}', format='%Y-%m-%d %H:%M:%S', errors='coerce')
 
             data_points_SC[row.standard_curve_uuid] = {
                 'x': x,
@@ -1449,14 +1478,14 @@ def run_standard_curve_analysis(standard_curves_df):
 
             if pd.isnull(v['x']).any() or pd.isnull(v['y']).any():
 
-                print(f"Removing curve: {k} due to NaN values.")
-                print(f"x:\n{v['x']}\ny:\n{v['y']}\n")
+                print(f'Removing curve: {k} due to NaN values.')
+                print(f'x:\n{v['x']}\ny:\n{v['y']}\n')
             else:
                 clean_data_points_SC[k] = v
                 
         print(f'Remaining valid curves: {len(clean_data_points_SC)}')
 
-    stored_plot_output = collapsible_output("Standard Curve Plots (Stored Parameters)")
+    stored_plot_output = collapsible_output('Standard Curve Plots (Stored Parameters)')
 
     with stored_plot_output:
 
@@ -1474,18 +1503,18 @@ def run_standard_curve_analysis(standard_curves_df):
             plt.plot(x_pts, y_pts, color='red', label='Stored Fit')
 
             plt.xscale('log')
-            plt.title(f'Standard Curve {key} (Chip: {data["chip_id"]}) - Stored Values')
+            plt.title(f'Standard Curve {key} (Chip: {data['chip_id']}) - Stored Values')
             plt.xlabel('Concentration')
             plt.ylabel('Signal')
             plt.legend()
             plt.show()
 
-    calc_plot_output = collapsible_output("Standard Curve Plots (Calculated Parameters)")
+    calc_plot_output = collapsible_output('Standard Curve Plots (Calculated Parameters)')
     unique_chips_SC = list({v['chip_id'] for v in clean_data_points_SC.values()})
     
     with calc_plot_output:
 
-        print(f"Total Unique Chips: {len(unique_chips_SC)}")
+        print(f'Total Unique Chips: {len(unique_chips_SC)}')
 
         for chip_id in unique_chips_SC:
 
