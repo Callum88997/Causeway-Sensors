@@ -5,9 +5,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import plotly.graph_objects as go
 from scipy.optimize import curve_fit
-from scipy.stats import linregress
-from scipy.integrate import trapezoid
 from IPython.display import display, HTML
 import ipywidgets as widgets
 
@@ -264,18 +263,23 @@ def extract_flags_from_pushes(flag_df):
         bunch = max(bunches_before, key=len)
         last_idx = bunch.index[-1]
 
-        new_records.append({'time': df.loc[last_idx, 'time'], 'information': 'Buffer 1'})
+        new_records.append({'time': df.loc[last_idx, 'time'], 'information': 'Buffer 1 - NHS EDC'})
 
         if last_idx + 1 < len(df):
             new_records.append({'time': df.loc[last_idx + 1, 'time'], 'information': 'Buffer 1 - Plateau'})
+
+    buffer_suffixes = {2: 'ETA', 3: 'Casein Block'}
 
     for i, bunch in enumerate(bunches_after[:2]):
         
         buffer_num = i + 2
         last_idx = bunch.index[-1]
 
-        new_records.append({'time': df.loc[last_idx, 'time'], 'information': f'Buffer {buffer_num}'})
+        suffix = buffer_suffixes.get(buffer_num, '')
+        buffer_name = f'Buffer {buffer_num} - {suffix}' if suffix else f'Buffer {buffer_num}'
 
+        new_records.append({'time': df.loc[last_idx, 'time'], 'information': buffer_name})
+        
         if last_idx + 1 < len(df):
             new_records.append({'time': df.loc[last_idx + 1, 'time'], 'information': f'Buffer {buffer_num} - Plateau'})
 
@@ -355,7 +359,7 @@ def calculate_baseline_peaks(time, reagent_flags):
             
             closest_idx = np.argmin(np.abs(time - target_time))
             
-            baseline_records.append({'time': time[closest_idx], 'information': f'Baseline ({stage1_raw})'})
+            baseline_records.append({'time': time[closest_idx], 'information': f'Baseline - {stage1_raw}'})
                     
     return baseline_records
 
@@ -395,8 +399,11 @@ def update_immob_flags(immob_df, immobilisation_dfs, flags_dfs, flags_dir='data/
         initial_records = []
         final_records = []
 
-        b1_flags = parsed_flags_df[parsed_flags_df['information'] == 'Buffer 1']
+        is_buffer_1 = parsed_flags_df['information'].str.startswith('Buffer 1', na=False)
+        not_plateau = ~parsed_flags_df['information'].str.endswith('Plateau', na=False)
 
+        b1_flags = parsed_flags_df[is_buffer_1 & not_plateau]
+        
         if not b1_flags.empty:
 
             b1_time = b1_flags['time'].iloc[0]
@@ -1569,3 +1576,326 @@ def run_standard_curve_analysis(standard_curves_df):
     sc_collected_df = pd.DataFrame(sc_collected_data)
 
     return clean_data_points_SC, sc_collected_df
+
+# Standard Curve Extra Data
+def calculate_sc_flags(files):
+    '''
+    Calculates dynamic baseline and peak flags from sensorgram data, 
+    saves them to a CSV, updates the dictionary, and optionally plots the results.
+
+    Args:
+        files (dict): Dictionary holding the parsed file data.
+        save_dir (str): Root directory where the CSV files should be saved.
+
+    Returns:
+        dict: The updated files dictionary containing the new baseline flag dataframes.
+    '''
+
+    for folder in files.keys():
+        previous_file = ''
+
+        if any('baseline' in key for key in files[folder].keys()):
+            continue
+
+        for file in list(files[folder].keys()):
+
+            if 'sensorgram' in file:
+
+                file_data = files[folder][file].sort_values('time').reset_index(drop=True)
+                previous_file_data = files[folder][previous_file].sort_values('time').reset_index(drop=True)
+
+                median_time_step = file_data['time'].diff().median()
+                lookahead_rows = max(1, int(5 / median_time_step))
+                
+                total_block_rows = int(30 / median_time_step) 
+                tail_sample_offset = int(5 / median_time_step)
+                
+                intervals = []
+
+                for i in range(len(previous_file_data) - 1):
+
+                    t_start = previous_file_data.iloc[i]['time']
+                    t_end = previous_file_data.iloc[i+1]['time']
+                    meas_1 = str(previous_file_data.iloc[i]['conc']).split('-')[0]
+                    meas_2 = str(previous_file_data.iloc[i+1]['conc']).split('-')[0]
+                    intervals.append((t_start, t_end, meas_1, meas_2))
+                    
+                last_meas = str(previous_file_data.iloc[-1]['conc']).split('-')[0]
+                intervals.append((previous_file_data.iloc[-1]['time'], file_data['time'].max(), last_meas, 'Final'))
+                    
+                saved_file_rows = []
+                
+                t_absolute_first = file_data['time'].min()
+                t_start_init = t_absolute_first
+                t_end_init = t_absolute_first + 5.0
+                
+                init_zone = file_data[(file_data['time'] >= t_start_init) & (file_data['time'] <= t_end_init)]
+
+                if not init_zone.empty:
+
+                    saved_file_rows.append({
+                        'Window_Start': t_start_init,
+                        'Window_End': t_end_init,
+                        'information': 'Initial Baseline',
+                        'ch1_avg': init_zone['channel1'].mean(),
+                        'ch2_avg': init_zone['channel2'].mean(),
+                        'ch1_peak': np.nan,
+                        'ch2_peak': np.nan,
+                        'peak_time': np.nan
+                    })
+    
+                for idx, (t_start, t_end, meas_1, meas_2) in enumerate(intervals):
+
+                    zone = file_data[(file_data['time'] >= t_start) & (file_data['time'] <= t_end)]
+
+                    if zone.empty:
+                        continue
+                        
+                    t_mid = t_start + (t_end - t_start) / 2
+                    sub_zone = zone[zone['time'] >= t_mid] if meas_1 == meas_2 else zone[zone['time'] <= t_mid]
+
+                    if sub_zone.empty:
+                        sub_zone = zone
+    
+                    drop_size = sub_zone['channel1'] - sub_zone['channel1'].shift(-lookahead_rows)
+
+                    if drop_size.dropna().empty:
+                        drop_size = sub_zone['channel1'] - sub_zone['channel1'].shift(-1)
+
+                    peak_global_idx = drop_size.idxmax()
+                    exact_row = file_data.loc[peak_global_idx]
+
+                    ch1_peak_val = exact_row['channel1']
+                    ch2_peak_val = exact_row['channel2']
+                    peak_time_val = exact_row['time']
+
+                    max_zone_idx = zone.index.max()
+                    target_baseline_idx = peak_global_idx + total_block_rows - tail_sample_offset
+        
+                    if target_baseline_idx > max_zone_idx:
+                        target_baseline_idx = max(peak_global_idx + lookahead_rows, max_zone_idx - tail_sample_offset)
+                    
+                    target_baseline_idx = max(peak_global_idx, min(target_baseline_idx, max_zone_idx))
+                    baseline_row = file_data.loc[target_baseline_idx]
+        
+                    t_base = baseline_row['time']
+                    t_start_win = t_base - 2.5
+                    t_end_win = t_base + 2.5
+                    
+                    win_zone = file_data[(file_data['time'] >= t_start_win) & (file_data['time'] <= t_end_win)]
+                    
+                    ch1_win_avg = win_zone['channel1'].mean() if not win_zone.empty else baseline_row['channel1']
+                    ch2_win_avg = win_zone['channel2'].mean() if not win_zone.empty else baseline_row['channel2']
+                    
+                    saved_file_rows.append({
+                        'Window_Start': t_start_win,
+                        'Window_End': t_end_win,
+                        'information': f'Baseline Window ({meas_1} / {meas_2})',
+                        'ch1_avg': ch1_win_avg,
+                        'ch2_avg': ch2_win_avg,
+                        'ch1_peak': ch1_peak_val,
+                        'ch2_peak': ch2_peak_val,
+                        'peak_time': peak_time_val
+                    })
+                    
+                t_absolute_last = file_data['time'].max()
+                t_start_final = t_absolute_last - 5.0
+                t_end_final = t_absolute_last
+                
+                final_zone = file_data[(file_data['time'] >= t_start_final) & (file_data['time'] <= t_end_final)]
+        
+                saved_file_rows.append({
+                    'Window_Start': t_start_final,
+                    'Window_End': t_end_final,
+                    'information': 'Final Baseline',
+                    'ch1_avg': final_zone['channel1'].mean(),
+                    'ch2_avg': final_zone['channel2'].mean(),
+                    'ch1_peak': np.nan,
+                    'ch2_peak': np.nan,
+                    'peak_time': np.nan
+                })
+
+                print(f'Calculated flags for {folder}/{file}')
+                flag_df = pd.DataFrame(saved_file_rows)
+                file_name = file.split('_')[1] + '_baseline_flags.csv'
+                file_path = os.path.join(save_dir, str(folder), file_name)
+                
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                flag_df.to_csv(file_path, index=False)
+        
+                files[folder][file_name.replace('.csv', '')] = flag_df
+
+            previous_file = file
+
+    return files
+
+def plot_baselines_and_peaks(file_data, previous_file_data, baseline_flags, title):
+    '''Generates the detailed Plotly visualization with tail-sampling windows and peaks.'''
+
+    baseline_flags = baseline_flags.copy()
+    baseline_flags['mid_time'] = (baseline_flags['Window_Start'] + baseline_flags['Window_End']) / 2
+            
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(x=file_data['time'], y=file_data['channel1'], mode='lines', name='Channel 1 Raw Data', line=dict(color='#1f77b4', width=1.5)))
+
+    if previous_file_data is not None and not previous_file_data.empty:
+
+        for _, flag_row in previous_file_data.iterrows():
+
+            fig.add_vline(x=flag_row['time'], line_width=1, line_dash='dash', line_color='black', opacity=1)
+            fig.add_annotation(x=flag_row['time'], y=1.02, yref='paper', text=str(flag_row['conc']), showarrow=False, textangle=-45, xanchor='left', yanchor='bottom', font=dict(size=9, color='#0f0f0f'))
+
+    fig.add_trace(go.Scatter(
+        x=baseline_flags['mid_time'], y=baseline_flags['ch1_avg'],
+        mode='markers', name='Saved Baseline (5s Avg)',
+        marker=dict(color='red', symbol='circle', size=9),
+        hoverinfo='text',
+        text=[
+            f'Type: {r['information']}<br>'
+            f'Range: {r['Window_Start']:.1f}s to {r['Window_End']:.1f}s<br>'
+            f'CH1 Avg: {r['ch1_avg']:.2f} RU<br>'
+            f'CH2 Avg: {r['ch2_avg']:.2f} RU' 
+            for _, r in baseline_flags.iterrows()
+        ]
+    ))
+
+    if 'ch1_peak' in baseline_flags.columns and 'peak_time' in baseline_flags.columns:
+
+        valid_peaks = baseline_flags.dropna(subset=['ch1_peak', 'peak_time'])
+        fig.add_trace(go.Scatter(
+            x=valid_peaks['peak_time'], y=valid_peaks['ch1_peak'],
+            mode='markers', name='Pre-Drop Peak',
+            marker=dict(color='orange', symbol='x', size=9, line=dict(color='black', width=1)),
+            hoverinfo='text',
+            text=[
+                f'Peak Value: {r['ch1_peak']:.2f} RU<br>Time: {r['peak_time']:.1f}s' 
+                for _, r in valid_peaks.iterrows()
+            ]
+        ))
+    
+    for _, r in baseline_flags.iterrows():
+
+        fig.add_vrect(
+            x0=r['Window_Start'], x1=r['Window_End'],
+            fillcolor='rgba(44, 160, 44, 0.12)', layer='below', 
+            line_width=1, line_color='rgba(44, 160, 44, 0.4)', line_dash='dot'
+        )
+    
+    start_avg_ru = baseline_flags.iloc[0]['ch1_avg']
+    fig.add_hline(y=start_avg_ru, line_width=1.5, line_dash='dash', line_color='purple', annotation_text='Start Average', annotation_position='top left')
+
+    final_avg_ru = baseline_flags.iloc[-1]['ch1_avg']
+    fig.add_hline(y=final_avg_ru, line_width=1.5, line_dash='dash', line_color='#e67e22', annotation_text='Final Average', annotation_position='bottom left')
+
+    fig.update_layout(
+        title=title,
+        xaxis_title='Time (Seconds)',
+        yaxis_title='Response Units (RU)',
+        yaxis=dict(range=[file_data['channel1'][0] - 0.5, file_data['channel1'].max() + 0.5]),
+        template='plotly_white',
+        hovermode='closest'
+    )
+    
+    fig.show()
+
+def calculate_and_plot_shift(shift_data, title):
+    '''Calculates baseline shifts and plots the twin-axis visualization.'''
+
+    shift_data = shift_data.copy()
+    initial_baseline = shift_data['ch1_avg'].iloc[0]
+
+    baseline_shift = shift_data['ch1_avg'] - initial_baseline
+    peak_response = shift_data['ch1_peak'] - initial_baseline
+    shift_percentage = (baseline_shift / peak_response) * 100
+    
+    shift_data['baseline_shift_raw'] = baseline_shift
+    shift_data['peak_response_raw'] = peak_response
+    shift_data['ch1_shift_pct'] = shift_percentage
+
+    summary_cols = ['information', 'ch1_peak', 'ch1_avg', 'baseline_shift_raw', 'ch1_shift_pct']
+    summary_table = shift_data[summary_cols].copy()
+    summary_table.columns = ['Measurement Step', 'Absolute Peak (RU)', 'Absolute Baseline (RU)', 'Baseline Shift (ΔRU)', '% Shift of Peak']
+    summary_table = summary_table.round(3)
+    
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    x_times = (shift_data['Window_Start'] + shift_data['Window_End']) / 2
+    ax1.plot(x_times, baseline_shift, 'x-', color='b', label='Baseline Shift (Absolute)')
+    ax1.set_xlabel('Time (s)')
+    ax1.set_ylabel('Response (a.u.)', color='b')
+    ax1.tick_params(axis='y', labelcolor='b')
+    
+    ax2 = ax1.twinx()
+    ax2.plot(x_times, shift_percentage, 'o--', color='r', alpha=0.6, label='% Shift of Peak')
+    ax2.set_ylabel('% of Peak Response', color='r')
+    ax2.tick_params(axis='y', labelcolor='r')
+
+    plt.title(f'{title} - Baseline-shifted response (initial = {initial_baseline:.2f})')
+    ax1.grid(True, alpha=0.3)
+    
+    lines_1, labels_1 = ax1.get_legend_handles_labels()
+    lines_2, labels_2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper left')
+
+    plt.show()
+
+    display(summary_table)
+
+def analyse_standard_curves_extra(files, save_dir = 'Standard Curve Files'):
+    '''
+    Iterates over the processed files dictionary, generating and displaying 
+    all requested outputs neatly inside collapsible UI widgets.
+    '''
+
+    files = calculate_sc_flags(files)
+
+    for folder in files.keys():
+
+        print(f'\nEvaluating Folder: {folder}')
+        
+        previous_file = ''
+
+        for file in list(files[folder].keys()):
+
+            clean_filename = file.replace('Copy of ', '').strip()
+            parts = clean_filename.split('_')
+            chip_id = parts[0] if len(parts) > 0 else 'Unknown'
+            measurement_id = parts[1] if len(parts) > 1 else 'Unknown'
+
+            if 'sensorgram' in file:
+
+                print(f'\n--- Chip ID: {chip_id} | Measurement ID: {measurement_id} ---')
+
+                file_data = files[folder][file]
+                previous_file_data = files[folder].get(previous_file, None)
+                
+                with collapsible_output(f'Basic Sensorgram: {file}'):
+                    plot_sensorgrams({file: file_data}, 'Standard Curve')
+                
+                if previous_file_data is not None and not previous_file_data.empty:
+                    with collapsible_output(f'Sensorgram with Flags: {file}'):
+
+                        times = previous_file_data['time'].tolist()
+                        labels = previous_file_data['conc'].tolist()
+                        title = f'Standard Curve Sensorgram for {file}'
+                        colours = ['tab:blue'] * len(times)
+                        
+                        plot_flags_on_sensorgrams(file_data, times, labels, title, colours)
+
+                file_name_flags = file.split('_')[1] + '_baseline_flags'
+
+                if file_name_flags in files[folder]:
+
+                    baseline_flags = files[folder][file_name_flags]
+
+                    with collapsible_output(f'Baseline & Peak Tail-Sampling: {file}'):
+                        plot_baselines_and_peaks(file_data, previous_file_data, baseline_flags, f'Tail-Sampling Window Method with Peaks - {file}')
+                        
+                    with collapsible_output(f'Baseline Shift Analysis: {file}'):
+
+                        calculate_and_plot_shift(baseline_flags, file)
+
+            previous_file = file
+
+    return files

@@ -2,10 +2,13 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import seaborn as sns
 import plotly.graph_objects as go
 import ipywidgets as widgets
 from IPython.display import display
+import re
+from scipy.optimize import curve_fit
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import IsolationForest
@@ -1036,3 +1039,417 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
                 print('No Standard Curve data available for this chip.')
                 
             print('\n')
+
+# Binding Kinetics
+def parse_conc_flag(conc_str):
+    '''
+    Parse a concentration flag label (e.g. '5ug/ml-1' or '2.5ug/ml-2') 
+    and extract just the numeric concentration.
+    '''
+    
+    match = re.search(r'([\d.]+)', str(conc_str))
+
+    if not match:
+        return None
+    
+    return float(match.group(1))
+
+def assoc_model(t, Req, kobs, R0, RI):
+    '''Association with Bulk Shift (RI)'''
+
+    return R0 + RI + Req * (1 - np.exp(-kobs * (t - t[0])))
+
+def dissoc_model(t, R0, kd, Rinf, RI):
+    '''Dissociation with Bulk Shift (RI) dropping off'''
+
+    return Rinf + (R0 - Rinf - RI) * np.exp(-kd * (t - t[0]))
+
+def fit_association(t, y):
+
+    R0_guess = y[0]
+    Req_guess = y[-1] - y[0]
+
+    try:
+        lower_bounds = [-np.inf, 0.0, -np.inf, -np.inf]
+        upper_bounds = [np.inf, np.inf, np.inf, np.inf]
+
+        popt, _ = curve_fit(assoc_model, t, y, p0=[Req_guess, 0.01, R0_guess, 0.0], bounds=(lower_bounds, upper_bounds), maxfev=10000)
+
+        return popt
+
+    except RuntimeError:
+        return None
+
+def fit_dissociation(t, y):
+
+    R0_guess = y[0]
+    Rinf_guess = y[-1]
+
+    try:
+        lower_bounds = [-np.inf, 0.0, -np.inf, -np.inf]
+        upper_bounds = [np.inf, np.inf, np.inf, np.inf]
+
+        popt, _ = curve_fit(dissoc_model, t, y, p0=[R0_guess, 0.01, Rinf_guess, 0.0], bounds=(lower_bounds, upper_bounds), maxfev=10000)
+
+        return popt
+
+    except RuntimeError:
+        return None
+
+def plot_kinetic_curves(data, title):
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    fig_plotly = go.Figure()
+    
+    cmap = plt.cm.tab20
+    
+    for i, f in enumerate(data['fits']):
+
+        colour = cmap(i % 20)
+        hex_colour = mcolors.to_hex(colour)
+        assoc_zone = f['assoc_zone']
+        dissoc_zone = f['dissoc_zone']
+
+        if assoc_zone.empty:
+            continue
+
+        t0 = assoc_zone['time'].iloc[0]
+        
+        if not dissoc_zone.empty:
+
+            t_raw = pd.concat([assoc_zone['time'], dissoc_zone['time']]) - t0
+            y_raw = pd.concat([assoc_zone['response'], dissoc_zone['response']])
+        else:
+            t_raw = assoc_zone['time'] - t0
+            y_raw = assoc_zone['response']
+            
+        fig_plotly.add_trace(go.Scatter(x=t_raw, y=y_raw, mode='lines', line=dict(color=hex_colour, width=1.5), name=f['meas_id']))
+        
+        ax.plot(assoc_zone['time'] - t0, assoc_zone['response'], color=colour, lw=1.5)
+
+        if not dissoc_zone.empty:
+            ax.plot(dissoc_zone['time'] - t0, dissoc_zone['response'], color=colour, lw=1.5)
+
+        if f['assoc_fit'] is not None:
+
+            Req, kobs, R0, RI_a = f['assoc_fit']
+            t_fit = assoc_zone['time'].values
+            y_fit = assoc_model(t_fit, Req, kobs, R0, RI_a)
+
+            fig_plotly.add_trace(go.Scatter(x=t_fit - t0, y=y_fit, mode='lines', line=dict(color='black', dash='dash', width=1.5), showlegend=False, hoverinfo='skip'))
+
+            ax.plot(t_fit - t0, y_fit, '--', color='black', lw=1.2)
+
+        if f['dissoc_fit'] is not None:
+
+            R0d, kd, Rinf, RI_d = f['dissoc_fit']
+            t_fit_d = dissoc_zone['time'].values
+            y_fit_d = dissoc_model(t_fit_d, R0d, kd, Rinf, RI_d)
+
+            fig_plotly.add_trace(go.Scatter(x=t_fit_d - t0, y=y_fit_d, mode='lines', line=dict(color='black', dash='dash', width=1.5), showlegend=False, hoverinfo='skip'))
+
+            ax.plot(t_fit_d - t0, y_fit_d, '--', color='black', lw=1.2)
+
+        ax.plot([], [], color=colour, label=f['meas_id'])
+
+    fig_plotly.update_layout(title=title, xaxis_title='Time from injection start (s)', yaxis_title='Response (RU, ref-subtracted)', template='plotly_white', legend_title_text='Measurement')
+    fig_plotly.show()
+
+    ax.set_xlabel('Time from injection start (s)')
+    ax.set_ylabel('Response (RU, ref-subtracted)')
+    ax.set_title(title)
+    
+    ax.legend(title='Measurement', fontsize=8, bbox_to_anchor=(1.01, 1), loc='upper left')
+    plt.tight_layout()
+    plt.show()
+
+def plot_kobs_vs_conc(data, title):
+
+    concs = [f['conc'] for f in data['fits'] if f['assoc_fit'] is not None]
+    kobs_vals = [f['assoc_fit'][1] for f in data['fits'] if f['assoc_fit'] is not None]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(concs, kobs_vals, color='tab:blue')
+
+    x_fit = np.linspace(0, max(concs), 50)
+    y_fit = data['ka'] * x_fit + data['kd']
+
+    ax.plot(x_fit, y_fit, '--', color='black', label=f"ka={data['ka']:.2e}, kd={data['kd']:.2e}")
+
+    ax.set_xlabel('Concentration (ug/ml)')
+    ax.set_ylabel('k_obs (s$^{-1}$)')
+    ax.set_title(title)
+    ax.legend()
+    plt.show()
+
+def plot_aligned_binding_curves(data, title, pre_baseline_seconds=10, tail_avg_seconds=5):
+
+    sensor = data['sensor']
+    fig, ax = plt.subplots(figsize=(10, 6))
+    fig_plotly = go.Figure()
+    
+    cmap = plt.cm.viridis
+    
+    n = len(data['fits'])
+
+    curve_id = 0
+
+    for i, f in enumerate(data['fits']):
+
+        assoc_zone = f['assoc_zone']
+
+        if assoc_zone.empty:
+            continue
+
+        colour = cmap(i / max(n - 1, 1)) 
+        hex_colour = mcolors.to_hex(colour)
+        t0 = assoc_zone['time'].iloc[0]
+
+        window = sensor[(sensor['time'] >= t0 - pre_baseline_seconds) & (sensor['time'] <= assoc_zone['time'].iloc[-1])]
+        pre_zone = window[window['time'] < t0]
+        baseline = pre_zone['response'].mean() if not pre_zone.empty else window['response'].iloc[0]
+
+        t_plot = window['time'] - t0
+        y_plot = window['response'] - baseline
+
+        label = f['meas_id']
+        
+        fig_plotly.add_trace(go.Scatter(x=t_plot, y=y_plot, mode='markers', marker=dict(color=hex_colour, size=4), name=label))
+
+        ax.scatter(t_plot, y_plot, s=18, label=label, color=colour)
+
+        tail_zone = y_plot[t_plot >= t_plot.max() - tail_avg_seconds]
+        plateau_val = tail_zone.mean()
+
+        t_max = t_plot.max()
+        t_range = t_max - t_plot.min()
+        x0_pl = t_max - (0.15 * t_range) 
+        
+        fig_plotly.add_trace(go.Scatter(x=[x0_pl, t_max], y=[plateau_val, plateau_val], mode='lines', line=dict(color=hex_colour, dash='dot', width=2), showlegend=False, hoverinfo='skip'))
+        fig_plotly.add_annotation(x=t_max, y=plateau_val, text=f'{plateau_val:.3f}', showarrow=False, xanchor='left', xshift=5, font=dict(size=11, color=hex_colour))
+
+        ax.axhline(y=plateau_val, xmin=0.85, xmax=1.0, linestyle=':', color=colour, linewidth=1.2)
+        ax.annotate(f'{plateau_val:.3f}', xy=(1.0, plateau_val), xycoords=('axes fraction', 'data'), xytext=(5, 0), textcoords='offset points', va='center', ha='left', fontsize=9)
+
+        curve_id += 1
+
+    fig_plotly.update_layout(title=title, xaxis_title='Time (sec)', yaxis_title='Signal (RU)', template='plotly_white', legend_title_text='Measurement')
+    fig_plotly.show()
+
+    ax.set_xlabel('Time(sec)')
+    ax.set_ylabel('Signal (RU)')
+    ax.set_title(title)
+    ax.grid(True)
+    ax.legend(loc='upper left', fontsize=8)
+    plt.tight_layout()
+    plt.show()
+
+def run_binding_kinetics_analysis(files):
+    '''
+    Computes binding kinetics (association/dissociation, global ka/kd/KD).
+    Correctly treats every flag as a new injection, automatically finding the 
+    peak to split the window into Association and Dissociation phases.
+    '''
+
+    kinetics_results = {}
+
+    for folder in files.keys():
+
+        if 'baseline' in folder:
+            continue
+            
+        kinetics_results[folder] = {}
+        previous_file = ''
+        
+        for file in list(files[folder].keys()):
+
+            if 'sensorgram' in file:
+
+                sensor = files[folder][file].sort_values('time').reset_index(drop=True)
+                flags = files[folder][previous_file].sort_values('time').reset_index(drop=True)
+                sensor['response'] = sensor['channel1']
+
+                parsed = []
+
+                for _, row in flags.iterrows():
+
+                    conc_val = parse_conc_flag(row['conc'])
+
+                    if conc_val is not None:
+                        parsed.append({'time': row['time'], 'conc': conc_val, 'label': str(row['conc'])})
+
+                segments = []
+                median_time_step = sensor['time'].diff().median()
+                lookahead_rows = max(1, int(5 / median_time_step))
+                
+                for i, event in enumerate(parsed):
+
+                    t_start = event['time']
+                    t_next = parsed[i+1]['time'] if i + 1 < len(parsed) else sensor['time'].max()
+                    
+                    zone = sensor[(sensor['time'] >= t_start) & (sensor['time'] <= t_next)]
+
+                    if len(zone) < lookahead_rows + 5: 
+                        continue
+                        
+                    drop_size = zone['response'] - zone['response'].shift(-lookahead_rows)
+
+                    if drop_size.dropna().empty:
+                        drop_size = zone['response'] - zone['response'].shift(-1)
+                        
+                    peak_idx = drop_size.idxmax()
+                    
+                    if pd.isna(peak_idx):
+                        peak_idx = zone['response'].idxmax()
+                        
+                    t_peak = sensor.loc[peak_idx, 'time']
+                    
+                    dissoc_candidate = sensor[(sensor['time'] > t_peak) & (sensor['time'] <= t_next)]
+
+                    if not dissoc_candidate.empty:
+                        
+                        t_cap = t_peak + 60.0
+                        dissoc_candidate = dissoc_candidate[dissoc_candidate['time'] <= t_cap]
+                        
+                        diffs = dissoc_candidate['response'].diff()
+                        spike_idx = diffs[diffs > 0.5].first_valid_index()
+                        
+                        if spike_idx is not None:
+                            t_dissoc_end = sensor.loc[spike_idx, 'time'] - 2.0
+                        else:
+                            t_dissoc_end = dissoc_candidate['time'].max()
+                    else:
+                        t_dissoc_end = t_next
+                    
+                    segments.append({
+                        'conc': event['conc'], 
+                        'meas_id': event['label'], 
+                        't_assoc_start': t_start,
+                        't_assoc_end': t_peak,
+                        't_dissoc_start': t_peak,
+                        't_dissoc_end': t_dissoc_end
+                    })
+
+                fits = []
+
+                for seg in segments:
+
+                    assoc_zone = sensor[(sensor['time'] >= seg['t_assoc_start']) & (sensor['time'] <= seg['t_assoc_end'])]
+                    dissoc_zone = sensor[(sensor['time'] >= seg['t_dissoc_start']) & (sensor['time'] <= seg['t_dissoc_end'])]
+
+                    assoc_fit = fit_association(assoc_zone['time'].values, assoc_zone['response'].values) if len(assoc_zone) > 5 else None
+                    dissoc_fit = fit_dissociation(dissoc_zone['time'].values, dissoc_zone['response'].values) if len(dissoc_zone) > 5 else None
+
+                    fits.append({
+                        'conc': seg['conc'], 'meas_id': seg['meas_id'],
+                        'assoc_fit': assoc_fit, 'dissoc_fit': dissoc_fit,
+                        'assoc_zone': assoc_zone, 'dissoc_zone': dissoc_zone
+                    })
+
+                file_data = {'sensor': sensor, 'segments': segments, 'fits': fits}
+                concs = [f['conc'] for f in fits if f['assoc_fit'] is not None]
+                kobs_vals = [f['assoc_fit'][1] for f in fits if f['assoc_fit'] is not None]
+
+                if len(concs) >= 2:
+
+                    slope, intercept, r_value, _, _ = linregress(concs, kobs_vals)
+                    ka = slope
+                    kd_from_intercept = intercept
+                    KD = kd_from_intercept / ka if ka != 0 else np.nan
+
+                    file_data['ka'] = ka
+                    file_data['kd'] = kd_from_intercept
+                    file_data['KD'] = KD
+                    file_data['kobs_r2'] = r_value ** 2
+
+                    dissoc_kds = [f['dissoc_fit'][1] for f in fits if f['dissoc_fit'] is not None]
+
+                    if dissoc_kds:
+                        file_data['kd_dissoc_mean'] = np.mean(dissoc_kds)
+
+                kinetics_results[folder][file] = file_data
+            previous_file = file
+
+
+    for folder, folder_files in kinetics_results.items():
+
+        print(f'\n{'='*40}\nKinetics Analysis: {folder}\n{'='*40}')
+        
+        summary_rows = []
+
+        for file, data in folder_files.items():
+
+            if 'ka' in data:
+
+                summary_rows.append({
+                    'File': file, 'ka (ug/ml*s)^-1': data['ka'], 'kd_intercept (s^-1)': data['kd'],
+                    'kd_dissoc_mean (s^-1)': data.get('kd_dissoc_mean', np.nan),
+                    'KD (ug/ml)': data['KD'], 'kobs_fit_R2': data['kobs_r2']
+                })
+        
+        if summary_rows:
+
+            with collapsible_output(f'Global Kinetics Summary: {folder}'):
+                display(pd.DataFrame(summary_rows))
+
+        for file, data in folder_files.items():
+
+            if 'fits' not in data: 
+                continue
+            
+            clean_filename = file.replace('Copy of ', '').strip()
+            parts = clean_filename.split('_')
+            chip_id = parts[0] if len(parts) > 0 else 'Unknown'
+            measurement_id = parts[1] if len(parts) > 1 else 'Unknown'
+            
+            print(f'\n--- Chip ID: {chip_id} | Measurement ID: {measurement_id} ---')
+
+            per_conc_rows = []
+
+            for f in data['fits']:
+
+                warning = ''
+                Req, kobs, R0 = (f['assoc_fit'][0], f['assoc_fit'][1], f['assoc_fit'][2]) if f['assoc_fit'] is not None else (np.nan, np.nan, np.nan)
+
+                if f['assoc_fit'] is None: 
+                    warning += 'Assoc fit failed; '
+                    
+                R0d, kd, Rinf = (f['dissoc_fit'][0], f['dissoc_fit'][1], f['dissoc_fit'][2]) if f['dissoc_fit'] is not None else (np.nan, np.nan, np.nan)
+
+                if f['dissoc_fit'] is None: 
+                    warning += 'Dissoc fit failed; '
+                    
+                if not np.isnan(kobs) and not np.isnan(kd) and f['conc'] > 0:
+
+                    ka_indiv = (kobs - kd) / f['conc']
+                    KD_indiv = kd / ka_indiv if ka_indiv != 0 else np.nan
+
+                    if kd >= kobs: 
+                        warning += 'kd >= kobs (Negative k_a); '
+                else:
+                    ka_indiv, KD_indiv = np.nan, np.nan
+                    
+                per_conc_rows.append({
+                    'Measurement': f['meas_id'], 'Concentration (ug/ml)': f['conc'], 'k_obs (s^-1)': kobs,
+                    'k_d (s^-1)': kd, 'k_a (calc)': ka_indiv, 'K_D': KD_indiv, 'R_eq': Req, 'Warning': warning.strip('; ')
+                })
+                
+            if per_conc_rows:
+
+                df_per_conc = pd.DataFrame(per_conc_rows).sort_values(by=['Concentration (ug/ml)', 'Measurement']).reset_index(drop=True)
+
+                with collapsible_output(f'Per-Concentration Details: {file}'):
+                    display(df_per_conc)
+
+            with collapsible_output(f'Kinetic Fit Curves: {file}'):
+                plot_kinetic_curves(data, f'Kinetic Curves — {chip_id}')
+
+            if 'ka' in data:
+
+                with collapsible_output(f'K_obs vs Concentration: {file}'):
+                    plot_kobs_vs_conc(data, f'k_obs vs Concentration — {chip_id}')
+
+            with collapsible_output(f'Aligned Binding Curves: {file}'):
+                plot_aligned_binding_curves(data, f'Binding Curves Overlay — {chip_id}')
+                
+    return kinetics_results
