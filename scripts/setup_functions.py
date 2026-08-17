@@ -66,7 +66,7 @@ def plot_sensorgrams(dfs_dict, stage_name):
             plt.plot(df[time_col], df[ch], label=ch)
 
         plt.title(f'{stage_name} Data for {name}')
-        plt.xlabel('Time')
+        plt.xlabel('Time (s)')
         plt.ylabel('RU')
         plt.legend()
         plt.show()
@@ -88,21 +88,25 @@ def plot_flags_on_sensorgrams(df_sens, times, labels, title, colours=None):
     colours = colours or ['k'] * len(times)
 
     # Initialises the plot figure
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(16, 8))
     
     # Loops through each time, label, colour, and index tuple
-    for t, label, c, i in zip(times, labels, colours, range(len(times))):
+    for i, (t, label, c) in enumerate(zip(times, labels, colours)):
         
         ax.axvline(x=t, linestyle='--', color=c)
-        y_pos = 0.95 if i % 2 != 0 else 0.45
-        ax.text(t, y_pos, label, rotation=45, transform=ax.get_xaxis_transform(), verticalalignment='top', color=c)
 
+        if 'plateau' in label.lower():
+            ax.text(t, 1.1, label, rotation=90, transform=ax.get_xaxis_transform(), verticalalignment='bottom', horizontalalignment='center', color=c)
+        elif 'baseline' in label.lower():
+            ax.text(t, 0.5, label, rotation=45, transform=ax.get_xaxis_transform(), verticalalignment='center', horizontalalignment='center', color=c)
+        else:
+            ax.text(t, -0.1, label, rotation=90, transform=ax.get_xaxis_transform(), verticalalignment='top', horizontalalignment='center', color=c)
     # Loops through each channel
     for ch in channels:
         ax.plot(df_sens[time_col], df_sens[ch], label=ch)
 
     ax.set_title(title)
-    ax.set_xlabel('Time')
+    ax.set_xlabel('Time (s)')
     ax.set_ylabel('RU')
     ax.legend()
     plt.show()
@@ -400,6 +404,10 @@ def parse_stage_label(info):
     
     # Splits the string to extract the stage and reagent type
     stage_raw = re.split(r'\s*-\s*Plateau', str(info))[0].strip()
+
+    if stage_raw.lower().startswith('buffer') and '-' in stage_raw:
+        stage_raw = stage_raw.split('-')[0].strip()
+
     stage = stage_raw.lower()
     reagent_type = stage.split()[0] if stage.split() else ''
     is_buffer = reagent_type == 'buffer'
@@ -1261,7 +1269,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
             labels = time_cols
 
             # Plots the sensorgram with flag overlays
-            plot_flags_on_sensorgrams(sens, times, labels, title=f'PEL Data for {chip_id}')
+            plot_flags_on_sensorgrams(sens, times, labels, title=f'PEL Sensorgram for {chip_id}')
 
             # Declares channel variables
             channels = sens.columns.tolist()[1:]
@@ -1656,7 +1664,7 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
             flag_data = flag_data[~flag_data.iloc[:, 1].str.contains('Concentration', case=False, na=False)]
             
             # Plots the flag markers on the sensorgrams
-            plot_flags_on_sensorgrams(sens, flag_data['time'].tolist(), flag_data['information'].tolist(), title=f"Immob Data: {immob_data['chip_id']}", colours=['r' if 'Buffer' in str(lbl) else 'k' for lbl in flag_data['information']])
+            plot_flags_on_sensorgrams(sens, flag_data['time'].tolist(), flag_data['information'].tolist(), title=f"Immob Sensorgram for {immob_data['chip_id']}", colours=['r' if 'Buffer' in str(lbl) else 'k' for lbl in flag_data['information']])
 
             print(f"Chip {immob_data['chip_id']} Metrics")
             
@@ -1984,7 +1992,7 @@ def run_standard_curve_analysis(standard_curves_df):
 
             plt.xscale('log')
             plt.title(f"Standard Curve {key} (Chip: {data['chip_id']}) - Stored Values")
-            plt.xlabel('Concentration')
+            plt.xlabel('Concentration (ug/ml)')
             plt.ylabel('Signal')
             plt.legend()
             plt.show()
@@ -2015,7 +2023,7 @@ def run_standard_curve_analysis(standard_curves_df):
 
                 plt.xscale('log')
                 plt.title(f'Standard Curve {key} (Chip: {chip_id}) - Calculated Fit')
-                plt.xlabel('Concentration')
+                plt.xlabel('Concentration (ug/ml)')
                 plt.ylabel('Signal')
                 plt.legend()
                 plt.show()
@@ -2057,6 +2065,7 @@ def run_standard_curve_analysis(standard_curves_df):
 
     return clean_data_points_SC, sc_collected_df
 
+# SC extra data
 def calculate_sc_flags(files, save_dir='Standard Curve Files'):
     '''Calculates dynamic baseline and peak flags from sensorgram data, saves them to a CSV, updates the dictionary, and optionally plots the results.
 
