@@ -304,7 +304,7 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
     with collapsible_output(f'{title} - Intra-stage Kinetics'):
 
         # Plots the intra-stage kinetic correlation matrix to show relationships between PEL response features
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(20, 20))
         sns.heatmap(wide_intra.corr(), cmap='plasma', center=0, annot=True)
         plt.title(f'PEL [{intra_target}]: Intra-stage Kinetics Correlation')
         plt.tight_layout()
@@ -913,7 +913,7 @@ def cross_stage_correlations(pel_df, immob_df, split_name, sc_metrics_df=None, t
 
             # Plots the cross-stage correlation matrix to show relationships between all selected features
             plt.figure(figsize=(20, 20))
-            sns.heatmap(corr_matrix, cmap='plasma', center=0, annot=True)
+            sns.heatmap(corr_matrix, cmap='plasma', center=0, annot=False)
             plt.title(f'{split_name} ({label}) - Overall Correlation')
             plt.tight_layout()
             plt.show()
@@ -1667,7 +1667,7 @@ def plot_kinetic_curves(data, title):
     ax.set_ylabel('Response (RU, ref-subtracted)')
     ax.set_title(title)
     
-    ax.legend(title='Measurement', fontsize=8, bbox_to_anchor=(1.01, 1), loc='upper left')
+    ax.legend(title='Measurement', fontsize=8, loc='upper right')
     plt.tight_layout()
     plt.show()
 
@@ -1701,7 +1701,7 @@ def plot_kobs_vs_conc(data, title):
     ax.legend()
     plt.show()
 
-def plot_aligned_binding_curves(data, title, pre_baseline_seconds=10, tail_avg_seconds=5):
+def plot__binding_curves(data, title, pre_baseline_seconds=10, tail_avg_seconds=5):
     '''Plots baseline-aligned binding curves using configurable sampling windows.
 
     Args:
@@ -2058,7 +2058,7 @@ def run_binding_kinetics_analysis(files):
 
             # Displays the aligned binding curves in a collapsible output section
             with collapsible_output(f'Aligned Binding Curves: {file}'):
-                plot_aligned_binding_curves(data, f'Binding Curves Overlay — {chip_id}')
+                plot_binding_curves(data, f'Binding Curves Overlay — {chip_id}')
                 
     # Returns the final updated dictionary
     return kinetics_results
