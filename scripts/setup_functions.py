@@ -2442,7 +2442,6 @@ def analyse_standard_curves_extra(files, save_dir='Standard Curve Files'):
 
                     # Display the baselines and peaks plot
                     with collapsible_output(f'Baseline & Peak Tail-Sampling: {file}'):
-                        
                         plot_baselines_and_peaks(file_data, previous_file_data, baseline_flags, f'Tail-Sampling Window Method with Peaks - {file}')
 
                     # Display the calculated baseline shift plots
