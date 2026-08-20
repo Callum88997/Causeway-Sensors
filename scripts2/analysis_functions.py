@@ -547,7 +547,7 @@ def analyse_cross_stage_split(pel_df, immob_df, split_name, channel_name, pel_ou
         both_anomalies = set(pel_outliers if pel_outliers else []).union(set(immob_outliers if immob_outliers else []))
             
         # Identifies flagged anomalies within the current subset
-        anomaly_mask = merged.isin(both_anomalies)
+        anomaly_mask = merged.index.isin(both_anomalies)
         
         # Highlights the identified anomalies on the scatter plot
         if anomaly_mask.any():
@@ -611,7 +611,7 @@ def analyse_cross_stage_split(pel_df, immob_df, split_name, channel_name, pel_ou
         # Proceeds with standard curve mapping if metrics are provided
         if sc_metrics_df is not None:
 
-            print(f'\n--- Cluster Functional Yield (R² Comparison) [{split_name} - {label}] ---')
+            print(f'\n--- Cluster Functional Yield (R² Comparison) [{split_name} - {channel_name}] ---')
             
             cluster_mapping = merged[['Cluster']].reset_index()
 
@@ -638,7 +638,7 @@ def analyse_cross_stage_split(pel_df, immob_df, split_name, channel_name, pel_ou
                 sns.stripplot(data=sc_cluster_df, x='Cluster', y='r2', color='black', alpha=0.5, jitter=True)
                 plt.axhline(0.95, color='red', linestyle='--', label='Pass Threshold (0.95)')
                 
-                plt.title(f'Standard Curve R² Distribution by Manufacturing Cluster\n{split_name} ({label})')
+                plt.title(f'Standard Curve R² Distribution by Manufacturing Cluster\n{split_name} ({channel_name})')
                 plt.xlabel('Manufacturing Cluster')
                 plt.ylabel('Standard Curve R² Score')
                 plt.legend()
@@ -830,7 +830,7 @@ def create_interactive_dashboard(data_catalog):
 
     # Initialises widget controls for the dashboard
     mode_toggle = widgets.ToggleButtons(options=['Absolute', 'Stage Delta', 'Intra-stage Kinetics'], style={'description_width': 'initial'})
-    channel_dropdown = widgets.Dropdown(options=['Channel 1', 'Channel 2', 'Both'], value='Channel 1', description='Channel:')
+    channel_dropdown = widgets.Dropdown(options=['Channel 1', 'Channel 2'], value='Channel 1', description='Channel:')
     sources = list(data_catalog['Absolute'].keys())
 
     x_source_drop = widgets.Dropdown(options=sources, value=sources[0], description='X Source:')
@@ -846,10 +846,14 @@ def create_interactive_dashboard(data_catalog):
 
         mode = mode_toggle.value
         x_src, y_src = x_source_drop.value, y_source_drop.value
-        
-        x_cols = list(data_catalog[mode][x_src].columns)
-        y_cols = list(data_catalog[mode][y_src].columns)
-        
+
+        # Uses the currently selected channel to fetch available columns
+        ch = channel_dropdown.value
+
+        # Extracts columns directly from the nested dictionary structure
+        x_cols = list(data_catalog[mode][x_src][ch].columns)
+        y_cols = list(data_catalog[mode][y_src][ch].columns)
+
         # Updates the X metric dropdown options
         x_col_drop.options = x_cols
 
@@ -887,54 +891,9 @@ def create_interactive_dashboard(data_catalog):
             pd.DataFrame: Joined, complete observations for the selected fields.
         '''
 
-        # Creates a copy of the X dataframe to preserve the original data
-        df_x = data_catalog[mode][x_src].copy()
-        
-        # Creates a copy of the Y dataframe to preserve the original data
-        df_y = data_catalog[mode][y_src].copy()
-        
-        def slice_channel(df, ch_label):
-            '''Returns rows for a selected channel when the table uses a MultiIndex.
-            
-            Args:
-                df (pd.DataFrame): The dataframe to slice.
-                ch_label (str): The label of the channel to isolate.
-                
-            Returns:
-                pd.DataFrame: The sliced dataframe.
-            '''
-
-            target_ch = 'Ch1' if ch_label == 'Channel 1' else 'Ch2'
-
-            # Performs the slice if the index is a MultiIndex containing 'Channel'
-            if isinstance(df.index, pd.MultiIndex) and 'Channel' in df.index.names:
-                
-                # Defines a standard mapping for channel names
-                ch_map = {
-                    'quad_ch1': 'Ch1', 
-                    'channel1': 'Ch1', 
-                    'quad_ch2': 'Ch2', 
-                    'channel2': 'Ch2',
-                    'quad_ch1_change': 'Ch1', 
-                    'channel1_change': 'Ch1',
-                    'quad_ch2_change': 'Ch2', 
-                    'channel2_change': 'Ch2'
-                }
-
-                # Renames the Channel level to ensure consistent lookups
-                df = df.rename(index=ch_map, level='Channel')
-                
-                # Returns the isolated target channel if it exists
-                if target_ch in df.index.get_level_values('Channel'):
-                    return df.xs(target_ch, level='Channel')
-                else:
-                    return pd.DataFrame()
-                
-            return df
-
-        # Slices both dataframes using the requested channel label
-        df_x = slice_channel(df_x, channel_label)
-        df_y = slice_channel(df_y, channel_label)
+        # Retrieves the specific dataframes from the catalog using the channel label
+        df_x = data_catalog[mode][x_src][channel_label].copy()
+        df_y = data_catalog[mode][y_src][channel_label].copy()
         
         # Checks whether either dataframe is empty
         if df_x.empty or df_y.empty:
@@ -973,7 +932,6 @@ def create_interactive_dashboard(data_catalog):
 
                 print('Please select valid metrics to plot.')
 
-                # Returns control to the calling code
                 return
                 
             # Creates a new Plotly figure for the visualisation
@@ -1017,7 +975,6 @@ def create_interactive_dashboard(data_catalog):
 
                 print('Not enough matching chip records to plot these selections.')
 
-                # Returns control to the calling code
                 return
                 
             # Formats and displays the final interactive dashboard
@@ -1072,7 +1029,14 @@ def get_top_drivers(df, chip_id, top_n=3):
     # Returns the formatted top drivers
     return [f'{stage} (Z: {z:.1f})' for stage, z in top_stages.items()]
 
-# need redoing
+def prepare_section(df, stage_col, val_col):
+
+    pivoted = pivot_chip_data(df, stage_col, val_col)
+    anomalies = detect_anomalies(pivoted, pivoted.columns.tolist(), contamination='auto')
+    outliers = anomalies[anomalies['anomaly'] == -1].index.tolist() if not anomalies.empty else []
+
+    return pivoted, outliers
+
 def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips, section_config, title='Overall At-Risk Chips Summary'):
     '''Clusters chips based on combined stage data, cross-references against standard curve metrics, and generates a structured summary report across 5 distinct sections.
 
@@ -1171,7 +1135,6 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
             print(f"Chip IDs (R^2 < 0.95): {', '.join(map(str, sorted(list(sc_fails))))}")
         else:
             print("No Standard Curve anomalies detected (All R² >= 0.95).")
-
 
     # Displays the results in a collapsible output section
     with collapsible_output(f'{title} - Chip Profiles'):

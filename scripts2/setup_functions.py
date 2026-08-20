@@ -101,6 +101,7 @@ def plot_flags_on_sensorgrams(df_sens, times, labels, title, colours=None):
             ax.text(t, 0.5, label, rotation=45, transform=ax.get_xaxis_transform(), verticalalignment='center', horizontalalignment='center', color=c)
         else:
             ax.text(t, -0.1, label, rotation=90, transform=ax.get_xaxis_transform(), verticalalignment='top', horizontalalignment='center', color=c)
+
     # Loops through each channel
     for ch in channels:
         ax.plot(df_sens[time_col], df_sens[ch], label=ch)
@@ -812,6 +813,7 @@ def collapse_combined_reagents(event_df):
     df.loc[mask_prg_inter, 'base_stage'] = 'PrG_Intermediate'
     
     df['compare_stage'] = df['base_stage'].str.lower()
+
     # Calculates sequential block IDs to group consecutive identical stages
     df['block_id'] = (df['compare_stage'] != df['compare_stage'].shift()).cumsum()
     
@@ -885,40 +887,6 @@ def calculate_custom_immob_changes(event_df, channels):
         custom_metrics.append(metric)
 
     return pd.concat([df, pd.DataFrame(custom_metrics)], ignore_index=True)
-
-def pool_channel_metrics(df, cols_to_pool, value_name='Signal', cols_to_drop=None):
-    '''Melts the dataframe to combine interchangeable channels into a single column, preserving chronological stage order.
-
-    Args:
-        df (pd.DataFrame): Dataframe containing channel metrics.
-        cols_to_pool (list[str]): Columns to pool together.
-        value_name (str): Name for the pooled value column.
-        cols_to_drop (list[str], optional): Columns to drop before pooling.
-
-    Returns:
-        pd.DataFrame: Pooled dataframe.
-    '''
-
-    # Creates a copy of the dataframe to preserve the original data
-    df_clean = df.drop(columns=cols_to_drop) if cols_to_drop else df.copy()
-    
-    # Extracts the ordered categories or unique stages to preserve order
-    if isinstance(df_clean['stage'].dtype, pd.CategoricalDtype):
-        stage_order = df_clean['stage'].cat.categories.tolist()
-    else:
-        stage_order = df_clean['stage'].unique().tolist()
-        
-    id_vars = [c for c in df_clean.columns if c not in cols_to_pool]
-    
-    # Melts the dataframe to pool selected channels
-    pooled = pd.melt(df_clean, id_vars=id_vars, value_vars=cols_to_pool, var_name='Channel', value_name=value_name)
-
-    # Applies categorical ordering to the stage column
-    pooled['stage'] = pd.Categorical(pooled['stage'], categories=stage_order, ordered=True)
-    
-    pooled = pooled.sort_values(by=['chip_id', 'stage', 'Channel']).reset_index(drop=True)
-
-    return pooled.dropna(subset=[value_name]).reset_index(drop=True)
 
 def normalise_by_initial_flag(df, channels, drop_start=True):
     '''Zero-bases channel values using the 'Initial' stage flag if present.
@@ -1223,7 +1191,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
         flags_PEL_df (pd.DataFrame): Processed PEL flag records.
 
     Returns:
-        tuple: PEL event, change, intra-stage, normalised, and pooled results.
+        tuple: PEL event, change, intra-stage, and normalised.
     '''
 
     # Initialises the quality check output widget
@@ -1419,96 +1387,10 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
             plot_all_statistics(all_events_PEL_norm_df, 'stage', ch, ylabel=f'{ch} Normalised Signal', title_prefix=f'Normalised - {ch}')
             plot_all_statistics(change_PEL_df, 'stage', f'{ch}_change', ylabel=f'Delta {ch} Signal', title_prefix=f'Delta - {ch}')
 
-    # Pools normalised channel metrics into a single column
-    pooled_norm_df = pool_channel_metrics(all_events_PEL_norm_df, cols_to_pool=channels, value_name='Norm_Signal')
-
-    # Pools channel change metrics into a single column
-    change_cols = [f'{ch}_change' for ch in channels]
-    pooled_change_df = pool_channel_metrics(change_PEL_df, cols_to_pool=change_cols, value_name='Delta_Signal', cols_to_drop=channels)
-
-    # Initialises the overall pooled summaries output widget
-    overall_summary_output = collapsible_output('Overall Pooled Summaries (Normalised & Change)')
-
-    with overall_summary_output:
-
-        # Displays the overall normalised metrics summary
-        print('Overall Normalised Metrics Summary')
-        summary_pooled_norm = build_stage_summary(pooled_norm_df, 'stage', ['Norm_Signal'])
-        display(summary_pooled_norm)
-        
-        # Displays the overall stage change metrics summary
-        print('\n-Overall Stage Change Metrics Summary')
-        summary_pooled_change = build_stage_summary(pooled_change_df, 'stage', ['Delta_Signal'])
-        display(summary_pooled_change)
-
-    # Initialises the overall statistical plots output widget
-    overall_stats_output = collapsible_output('Statistical Plots (Overall Combined Channels)')
-
-    with overall_stats_output:
-
-        print(f"Pooled Observations (n) across all channels: {len(pooled_norm_df)}")
-
-        # Displays the first 6 rows of the pooled normalisation dataframe
-        print('Data preview (Grouped by Chip ID):')
-        display(pooled_norm_df.head(6))
-        
-        plot_all_statistics(pooled_norm_df, x_col='stage', y_col='Norm_Signal', ylabel='Normalised Signal (All Channels)', title_prefix='Overall Pooled Normalised')
-        plot_all_statistics(pooled_change_df, x_col='stage', y_col='Delta_Signal', ylabel='Delta Signal (All Channels)', title_prefix='Overall Pooled Delta')
-
     # Concatenates all intra-stage feature dataframes
-    pel_intra_df = pd.concat(all_intrastage_PEL, ignore_index=True)
-    
-    # Checks whether the intra-stage dataframe contains data
-    if not pel_intra_df.empty:
+    pel_intra_df = pd.concat(all_intrastage_PEL, ignore_index=True)            
 
-        id_vars = [col for col in ['stage', 'chip_id'] if col in pel_intra_df.columns]
-        suffixes = ['_std', '_spike_to_noise_ratio', '_max_residual_zscore']
-        melted_chunks = []
-        
-        # Loops through each channel to melt and pool intra-stage features
-        for ch in channels:
-
-            ch_cols = [f'{ch}{suff}' for suff in suffixes if f'{ch}{suff}' in pel_intra_df.columns]
-            
-            if not ch_cols:
-                continue
-                
-            # Creates a copy of the temp dataframe to preserve the original data
-            temp_df = pel_intra_df[id_vars + ch_cols].copy()
-            
-            # Renames columns for consistency in the pooled dataframe
-            rename_dict = {f'{ch}{suff}': f'pooled_signal{suff}' for suff in suffixes}
-            temp_df = temp_df.rename(columns=rename_dict)
-            
-            temp_df['Channel'] = ch
-            melted_chunks.append(temp_df)
-            
-        # Concatenates and formats the pooled intra-stage metrics
-        if melted_chunks:
-
-            pooled_intra_df = pd.concat(melted_chunks, ignore_index=True)
-            
-            cols = id_vars + ['Channel'] + [col for col in pooled_intra_df.columns if col not in id_vars + ['Channel']]
-            pooled_intra_df = pooled_intra_df[cols]
-
-            original_stage_order = pel_intra_df['stage'].drop_duplicates().tolist()
-
-            # Applies categorical ordering to the stage column
-            pooled_intra_df['stage'] = pd.Categorical(pooled_intra_df['stage'], categories=original_stage_order, ordered=True)
-            
-            pooled_intra_df = pooled_intra_df.sort_values(by=['chip_id', 'stage', 'Channel']).reset_index(drop=True)
-
-        else:
-            pooled_intra_df = pd.DataFrame()
-    else:
-        pooled_intra_df = pd.DataFrame()
-
-    return (
-        all_events_PEL_df, 
-        change_PEL_df, 
-        pd.concat(all_intrastage_PEL, ignore_index=True), 
-        all_events_PEL_norm_df
-    )
+    return all_events_PEL_df, change_PEL_df, pel_intra_df, all_events_PEL_norm_df
 
 def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_dfs):
     '''Runs the complete immobilisation analysis workflow across all split types.
@@ -1520,7 +1402,7 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
         averaged_flags_dfs (dict): Five-second averaged flag data.
 
     Returns:
-        tuple: Event, change, intra-stage, normalised, and pooled split results.
+        tuple: Event, change, intra-stage and normalised..
     '''
 
     # Initialises the quality check collapsible output widget
@@ -1774,119 +1656,6 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
                 plot_all_statistics(avg_comb_df, 'stage', ch, ylabel=f'{ch} Signal', title_prefix=f'5s Avg Comb Absolute - {ch}')
                 plot_all_statistics(avg_comb_norm_df, 'stage', ch, ylabel=f'{ch} Norm Signal', title_prefix=f'5s Avg Comb Normalised - {ch}')
                 plot_all_statistics(avg_comb_change_df, 'stage', f'{ch}_change', ylabel=f'Delta {ch}', title_prefix=f'5s Avg Comb Delta - {ch}')
-
-    # Defines the variants for overall pooling and summary generation
-    variants = [('Immediate', all_events_imp_norm, all_changes_imp), ('Combined', all_events_comb_norm, all_changes_comb)]
-
-    if averaged_flags_dfs:
-
-        variants.extend([('5s Avg', all_events_avg_imp_norm, all_changes_avg_imp), ('5s Avg Combined', all_events_avg_comb_norm, all_changes_avg_comb)])
-
-    pooled_results = {}
-
-    overall_summary_output = collapsible_output('Overall Pooled Summaries (Normalised & Change)')
-
-    with overall_summary_output:
-
-        # Loops through each variant tuple
-        for name, norm_list, change_list in variants:
-            
-            norm_concat = pd.concat(norm_list, ignore_index=True)
-            change_concat = pd.concat(change_list, ignore_index=True)
-            
-            # Pools the normalised and changed channel metrics into a single column
-            pooled_norm = pool_channel_metrics(norm_concat, cols_to_pool=channels, value_name='Norm_Signal')
-            pooled_change = pool_channel_metrics(change_concat, cols_to_pool=change_cols, value_name='Delta_Signal', cols_to_drop=channels)
-            
-            pooled_results[name] = (pooled_norm, pooled_change)
-            
-            print(f'\n {name}: Overall Normalised Metrics Summary')
-            
-            # Displays overall normalised metrics summary
-            display(build_stage_summary(pooled_norm, 'stage', ['Norm_Signal']))
-            
-            print(f'\n {name}: Overall Stage Change Metrics Summary')
-            
-            # Displays overall stage change metrics summary
-            display(build_stage_summary(pooled_change, 'stage', ['Delta_Signal']))
-
-    overall_stats_output = collapsible_output('Statistical Plots (Overall Combined Channels)')
-
-    with overall_stats_output:
-
-        # Loops through each key-value pair in the dictionary
-        for name, (pooled_norm, pooled_change) in pooled_results.items():
-
-            print(f"\n{'='*20} {name.upper()} {'='*20}")
-            print(f'Pooled Observations (n) across all channels: {len(pooled_norm)}')
-            print('Data preview (Grouped by Chip ID):')
-            
-            # Displays preview of pooled normalisation dataframe
-            display(pooled_norm)
-            
-            plot_all_statistics(pooled_norm, x_col='stage', y_col='Norm_Signal', ylabel='Normalised Signal (All Channels)', title_prefix=f'{name} Overall Pooled Normalised')
-            plot_all_statistics(pooled_change, x_col='stage', y_col='Delta_Signal', ylabel='Delta Signal (All Channels)', title_prefix=f'{name} Overall Pooled Delta')
-
-    def pool_intra_df(df, channels_list):
-        '''Pools intra-stage metrics across the selected signal channels.
-
-        Args:
-            df (pd.DataFrame): Intra-stage feature table.
-            channels_list (list[str]): Channel prefixes to combine.
-
-        Returns:
-            pd.DataFrame: Table containing pooled intra-stage metrics.
-        '''
-
-        # Checks whether the dataframe contains data
-        if df.empty:
-            return pd.DataFrame()
-        
-        id_vars = [col for col in ['stage', 'chip_id'] if col in df.columns]
-        suffixes = ['_std', '_spike_to_noise_ratio', '_max_residual_zscore']
-        melted_chunks = []
-        
-        # Loops through each channel
-        for ch in channels_list:
-            
-            ch_cols = [f'{ch}{suff}' for suff in suffixes if f'{ch}{suff}' in df.columns]
-            
-            if not ch_cols:
-                continue
-                
-            # Creates a copy of the temp dataframe to preserve the original data
-            temp_df = df[id_vars + ch_cols].copy()
-            
-            # Renames columns for consistency in the pooled dataframe
-            rename_dict = {f'{ch}{suff}': f'pooled_signal{suff}' for suff in suffixes}
-            temp_df = temp_df.rename(columns=rename_dict)
-            
-            temp_df['Channel'] = ch
-            melted_chunks.append(temp_df)
-            
-        if melted_chunks:
-
-            pooled = pd.concat(melted_chunks, ignore_index=True)
-            
-            cols = id_vars + ['Channel'] + [col for col in pooled.columns if col not in id_vars + ['Channel']]
-
-            pooled = pooled[cols]
-
-            original_stage_order = df['stage'].drop_duplicates().tolist()
-            
-            # Applies categorical ordering to the stage column
-            pooled['stage'] = pd.Categorical(pooled['stage'], categories=original_stage_order, ordered=True)
-            
-            pooled = pooled.sort_values(by=['chip_id', 'stage', 'Channel']).reset_index(drop=True)
-
-            return pooled
-            
-        return pd.DataFrame()
-
-    imp_intra_pooled = pool_intra_df(imp_intra_df, channels)
-    comb_intra_pooled = pool_intra_df(comb_intra_df, channels)
-    avg_imp_intra_pooled = pool_intra_df(avg_imp_intra_df, channels)
-    avg_comb_intra_pooled = pool_intra_df(avg_comb_intra_df, channels)
 
     return (
         imp_df, imp_change_df, imp_intra_df, imp_norm_df,
