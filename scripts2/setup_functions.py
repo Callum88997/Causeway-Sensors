@@ -1026,8 +1026,8 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
                 
                 row_features[f'{ch}_std'] = np.std(signal)
             else:
-                #row_features[f'{ch}_spike_to_noise_ratio'] = 0.0
-                #row_features[f'{ch}_max_residual_zscore'] = 0.0
+                row_features[f'{ch}_spike_to_noise_ratio'] = 0.0
+                row_features[f'{ch}_max_residual_zscore'] = 0.0
                 row_features[f'{ch}_std'] = 0.0
                 
         features_list.append(row_features)
@@ -1462,7 +1462,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
     if not pel_intra_df.empty:
 
         id_vars = [col for col in ['stage', 'chip_id'] if col in pel_intra_df.columns]
-        suffixes = ['_std']#, '_spike_to_noise_ratio', '_max_residual_zscore']
+        suffixes = ['_std', '_spike_to_noise_ratio', '_max_residual_zscore']
         melted_chunks = []
         
         # Loops through each channel to melt and pool intra-stage features
@@ -1503,7 +1503,12 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
     else:
         pooled_intra_df = pd.DataFrame()
 
-    return all_events_PEL_df, change_PEL_df, pd.concat(all_intrastage_PEL, ignore_index=True), all_events_PEL_norm_df, pooled_norm_df, pooled_change_df, pooled_intra_df
+    return (
+        all_events_PEL_df, 
+        change_PEL_df, 
+        pd.concat(all_intrastage_PEL, ignore_index=True), 
+        all_events_PEL_norm_df
+    )
 
 def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_dfs):
     '''Runs the complete immobilisation analysis workflow across all split types.
@@ -1838,7 +1843,7 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
             return pd.DataFrame()
         
         id_vars = [col for col in ['stage', 'chip_id'] if col in df.columns]
-        suffixes = ['_std']#, '_spike_to_noise_ratio', '_max_residual_zscore']
+        suffixes = ['_std', '_spike_to_noise_ratio', '_max_residual_zscore']
         melted_chunks = []
         
         # Loops through each channel
@@ -1883,10 +1888,11 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
     avg_imp_intra_pooled = pool_intra_df(avg_imp_intra_df, channels)
     avg_comb_intra_pooled = pool_intra_df(avg_comb_intra_df, channels)
 
-    return (imp_df, imp_change_df, imp_intra_df, imp_norm_df, pooled_results['Immediate'][0], pooled_results['Immediate'][1], imp_intra_pooled,
-        comb_df, comb_change_df, comb_intra_df, comb_norm_df, pooled_results['Combined'][0], pooled_results['Combined'][1], comb_intra_pooled,
-        avg_imp_df, avg_imp_change_df, avg_imp_intra_df, avg_imp_norm_df, pooled_results.get('5s Avg', (None, None))[0], pooled_results.get('5s Avg', (None, None))[1], avg_imp_intra_pooled,
-        avg_comb_df, avg_comb_change_df, avg_comb_intra_df, avg_comb_norm_df, pooled_results.get('5s Avg Combined', (None, None))[0], pooled_results.get('5s Avg Combined', (None, None))[1], avg_comb_intra_pooled
+    return (
+        imp_df, imp_change_df, imp_intra_df, imp_norm_df,
+        comb_df, comb_change_df, comb_intra_df, comb_norm_df,
+        avg_imp_df, avg_imp_change_df, avg_imp_intra_df, avg_imp_norm_df,
+        avg_comb_df, avg_comb_change_df, avg_comb_intra_df, avg_comb_norm_df
     )
 
 def run_standard_curve_analysis(standard_curves_df):

@@ -49,10 +49,7 @@ def detect_anomalies(df, feature_cols, contamination='auto'):
     return df_clean
 
 def pivot_chip_data(df, stage_col, val_col):
-    '''Pivots data for anomaly detection. 
-    
-    If a 'Channel' column exists, it uses both chip_id and Channel as the row index, 
-    effectively treating each channel as an independent observation (doubling the dataset size).
+    '''Pivots data for anomaly detection.
 
     Args:
         df (pd.DataFrame): The dataframe to pivot.
@@ -62,13 +59,8 @@ def pivot_chip_data(df, stage_col, val_col):
     Returns:
         pd.DataFrame: The pivoted dataframe.
     '''
-
-    # Checks for the presence of the 'Channel' column to determine the pivot index
-    if 'Channel' in df.columns:
-        return df.pivot_table(index=['chip_id', 'Channel'], columns=stage_col, values=val_col, aggfunc='mean', observed=False)
-    else:
-        return df.pivot_table(index='chip_id', columns=stage_col, values=val_col, aggfunc='mean', observed=False)
-    
+    return df.pivot_table(index='chip_id', columns=stage_col, values=val_col, aggfunc='mean', observed=False)
+   
 def summarise_correlations(corr_matrix, label, num=3):
     '''Summarises the strongest positive, strongest negative, and weakest correlations.
 
@@ -191,7 +183,7 @@ def create_wide_intra(intra_df, val_col):
     '''
 
     # Defines the metrics to extract based on the target column
-    intra_metrics = [f'{val_col}_std']#, f'{val_col}_spike_to_noise_ratio', f'{val_col}_max_residual_zscore']
+    intra_metrics = [f'{val_col}_std', f'{val_col}_spike_to_noise_ratio', f'{val_col}_max_residual_zscore']
 
     wide_list = []
     
