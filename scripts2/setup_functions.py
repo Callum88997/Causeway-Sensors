@@ -951,14 +951,20 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
         start_time = events.loc[i, 'time']
         end_time = events.loc[i + 1, 'time']
         stage_transition = f"{events.loc[i, 'stage']} -> {events.loc[i+1, 'stage']}"
-        
-        # Creates a mask to slice sensorgram data for the current stage
-        mask = (sens_time >= start_time) & (sens_time < end_time)
-        stage_data = sens_df[mask]
+
+        if start_time == end_time:
+
+            # Zero duration between flags
+            stage_data = sens_df[sens_time == start_time]
+        else:
+
+            # Creates a mask to slice sensorgram data for the current stage
+            mask = (sens_time >= start_time) & (sens_time < end_time)
+            stage_data = sens_df[mask]
         
         # Checks whether the dataframe contains data
-        if stage_data.empty:
-            continue
+        #if stage_data.empty:
+        #    continue
         
         # Initialises the features dictionary for the current row
         row_features = {
@@ -976,27 +982,7 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
                 row_features[f'{ch}_std'] = np.std(signal)
             else:
 
-                row_features[f'{ch}_std'] = np.nan
-            
-            # Calculates advanced statistical features if sufficient data points exist
-            if len(signal) > 5:
-
-                '''diffs = np.abs(np.diff(signal))
-                noise_floor = np.percentile(diffs, 90) + 1e-9 
-                row_features[f'{ch}_spike_to_noise_ratio'] = np.max(diffs) / noise_floor
-                
-                w_size = max(15, len(signal) // 10) 
-                trend = pd.Series(signal).rolling(window=w_size, center=True, min_periods=1).median()
-                residuals = np.abs(signal - trend)
-                
-                res_std = np.std(residuals) + 1e-9
-                row_features[f'{ch}_max_residual_zscore'] = np.max(residuals) / res_std'''
-                
-                row_features[f'{ch}_std'] = np.std(signal)
-            else:
-                row_features[f'{ch}_spike_to_noise_ratio'] = 0.0
-                row_features[f'{ch}_max_residual_zscore'] = 0.0
-                row_features[f'{ch}_std'] = 0.0
+                row_features[f'{ch}_std'] = 0
                 
         features_list.append(row_features)
         
@@ -1256,6 +1242,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
 
             # Converts the event dictionary to a dataframe
             event_df = pd.DataFrame(event_dict)
+
             all_events_PEL.append(event_df)
 
             # Displays raw metrics for the current chip
@@ -1320,6 +1307,8 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
             # Extracts intra-stage features
             intra_df = extract_intrastage_features(sens_norm, event_norm_df, channels, chip_id)
             all_intrastage_PEL.append(intra_df)
+
+            display(intra_df)
 
     # Concatenates all event dataframes into a single dataframe
     all_events_PEL_df = pd.concat(all_events_PEL, ignore_index=True)
@@ -1468,6 +1457,7 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
             event_dict[ch] = np.interp(times, sens.iloc[:, 0], sens[ch])
         
         event_df = pd.DataFrame(event_dict)
+
         all_events_imp.append(event_df)
         all_changes_imp.append(calculate_custom_immob_changes(event_df, channels))
 

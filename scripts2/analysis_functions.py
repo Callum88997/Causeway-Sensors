@@ -820,65 +820,197 @@ def cross_stage_correlations(pel_df, immob_df, split_name, channel_name, sc_metr
         plt.tight_layout()
         plt.show()
 
-# need to make a few changes to this
 def create_interactive_dashboard(data_catalog):
     '''Creates an interactive explorer for comparing data sources and features.
 
     Args:
         data_catalog (dict): Nested mapping of analysis modes to named dataframes.
     '''
+    # State dictionary tracks the last known values to prevent overwriting active filters
+    state = {
+        'updating': False,
+        'last_mode': None,
+        'last_ch': None,
+        'last_x_src': None,
+        'last_x_col': None,
+        'last_y_src': None,
+        'last_y_col': None
+    }
+
+    all_sources = list(data_catalog['Absolute'].keys())
 
     # Initialises widget controls for the dashboard
     mode_toggle = widgets.ToggleButtons(options=['Absolute', 'Stage Delta', 'Intra-stage Kinetics'], style={'description_width': 'initial'})
     channel_dropdown = widgets.Dropdown(options=['Channel 1', 'Channel 2'], value='Channel 1', description='Channel:')
-    sources = list(data_catalog['Absolute'].keys())
-
-    x_source_drop = widgets.Dropdown(options=sources, value=sources[0], description='X Source:')
-    y_source_drop = widgets.Dropdown(options=sources, value=sources[0], description='Y Source:')
+    
+    x_source_drop = widgets.Dropdown(options=all_sources, value=all_sources[0], description='X Source:')
+    y_source_drop = widgets.Dropdown(options=all_sources, value=all_sources[0], description='Y Source:')
 
     x_col_drop = widgets.Dropdown(description='X Metric:')
     y_col_drop = widgets.Dropdown(description='Y Metric:')
     
-    out = widgets.Output()
+    # Range filters for Greater than / Less than selection based on absolute limits
+    x_min_input = widgets.BoundedFloatText(description='Min X:')
+    x_max_input = widgets.BoundedFloatText(description='Max X:')
+    y_min_input = widgets.BoundedFloatText(description='Min Y:')
+    y_max_input = widgets.BoundedFloatText(description='Max Y:')
     
+    # Group filters into containers initially hidden
+    x_filters = widgets.HBox([x_min_input, x_max_input], layout=widgets.Layout(display='none'))
+    y_filters = widgets.HBox([y_min_input, y_max_input], layout=widgets.Layout(display='none'))
+    
+    out = widgets.Output()
+
+    def update_sources(*args):
+        '''Updates available data sources depending on the selected channel (removes Standard Curve for Ch2).'''
+
+        if state['updating']: 
+            return
+        
+        state['updating'] = True
+        
+        ch = channel_dropdown.value
+
+        # Standard Curve missing from Channel 2
+        valid_sources = [s for s in all_sources if s != 'Standard Curve'] if ch == 'Channel 2' else all_sources
+        
+        curr_x, curr_y = x_source_drop.value, y_source_drop.value
+        
+        x_source_drop.options = valid_sources
+        y_source_drop.options = valid_sources
+        
+        x_source_drop.value = curr_x if curr_x in valid_sources else valid_sources[0]
+        y_source_drop.value = curr_y if curr_y in valid_sources else valid_sources[0]
+        
+        state['updating'] = False
+        update_dropdowns()
+
     def update_dropdowns(*args):
         '''Refreshes feature dropdown options after the selected sources change.'''
 
-        mode = mode_toggle.value
-        x_src, y_src = x_source_drop.value, y_source_drop.value
-
-        # Uses the currently selected channel to fetch available columns
-        ch = channel_dropdown.value
-
-        # Extracts columns directly from the nested dictionary structure
-        x_cols = list(data_catalog[mode][x_src][ch].columns)
-        y_cols = list(data_catalog[mode][y_src][ch].columns)
-
-        # Updates the X metric dropdown options
-        x_col_drop.options = x_cols
-
-        # Resets the X metric value if the current selection is invalid
-        if x_col_drop.value not in x_cols: 
-
-            x_col_drop.value = x_cols[0] if x_cols else None
-            
-        # Updates the Y metric dropdown options
-        y_col_drop.options = y_cols
+        if state['updating']:
+            return
         
-        # Resets the Y metric value if the current selection is invalid
-        if y_col_drop.value not in y_cols: 
+        state['updating'] = True
+        
+        mode = mode_toggle.value
+        ch = channel_dropdown.value
+        x_src, y_src = x_source_drop.value, y_source_drop.value
+        
+        if x_src and y_src:
 
-            y_col_drop.value = y_cols[0] if y_cols else None
+            # Extracts columns directly from the nested dictionary structure
+            x_cols = list(data_catalog[mode][x_src][ch].columns)
+            y_cols = list(data_catalog[mode][y_src][ch].columns)
+
+            # Extracts columns selected
+            curr_x_col = x_col_drop.value 
+            curr_y_col = y_col_drop.value
+
+            # Updates the X metric dropdown options
+            x_col_drop.options = x_cols
+
+            # Updates the Y metric dropdown options
+            y_col_drop.options = y_cols
+
+            # Resets the X metric value if the current selection is invalid
+            x_col_drop.value = curr_x_col if curr_x_col in x_cols else (x_cols[0] if x_cols else None)
+
+            # Resets the Y metric value if the current selection is invalid
+            y_col_drop.value = curr_y_col if curr_y_col in y_cols else (y_cols[0] if y_cols else None)
             
-    # Binds observers to trigger dropdown updates on value changes
-    mode_toggle.observe(update_dropdowns, 'value')
-    x_source_drop.observe(update_dropdowns, 'value')
-    y_source_drop.observe(update_dropdowns, 'value')
-    update_dropdowns()
-    
+        state['updating'] = False
+        update_filter_bounds()
+
+    def update_filter_bounds(*args):
+        '''Dynamically sets the absolute min/max limits ONLY for the axes that were just modified.'''
+
+        if state['updating']:
+            return
+        
+        state['updating'] = True
+        
+        mode, ch = mode_toggle.value, channel_dropdown.value
+        x_src, y_src = x_source_drop.value, y_source_drop.value
+        x_col, y_col = x_col_drop.value, y_col_drop.value
+        
+        # Determine exactly which axis datasets changed to avoid wiping custom filters on the other axis
+        needs_x_update = (mode != state.get('last_mode') or ch != state.get('last_ch') or x_src != state.get('last_x_src') or x_col != state.get('last_x_col'))
+        needs_y_update = (mode != state.get('last_mode') or ch != state.get('last_ch') or y_src != state.get('last_y_src') or y_col != state.get('last_y_col'))
+        
+        if needs_x_update:
+            if x_src == 'Standard Curve':
+
+                x_filters.layout.display = 'flex'
+
+                if x_col:
+
+                    df_x = data_catalog[mode][x_src][ch]
+
+                    if not df_x.empty and x_col in df_x.columns:
+
+                        x_data = df_x[x_col].dropna()
+
+                        if not x_data.empty:
+
+                            x_min, x_max = float(x_data.min()), float(x_data.max())
+
+                            if x_min == x_max: 
+                                x_max += 1e-9 
+                            
+                            x_min_input.min, x_max_input.max = -float('inf'), float('inf')
+                            x_max_input.min, x_min_input.max = -float('inf'), float('inf')
+                            
+                            x_min_input.value, x_max_input.value = x_min, x_max
+                            x_min_input.min, x_min_input.max = x_min, x_max
+                            x_max_input.min, x_max_input.max = x_min, x_max
+            else:
+                x_filters.layout.display = 'none'
+            
+            # Save the new X state
+            state['last_x_src'], state['last_x_col'] = x_src, x_col
+
+        if needs_y_update:
+            if y_src == 'Standard Curve':
+
+                y_filters.layout.display = 'flex'
+
+                if y_col:
+
+                    df_y = data_catalog[mode][y_src][ch]
+
+                    if not df_y.empty and y_col in df_y.columns:
+
+                        y_data = df_y[y_col].dropna()
+
+                        if not y_data.empty:
+
+                            y_min, y_max = float(y_data.min()), float(y_data.max())
+
+                            if y_min == y_max: 
+                                y_max += 1e-9 
+                            
+                            y_min_input.min, y_max_input.max = -float('inf'), float('inf')
+                            y_max_input.min, y_min_input.max = -float('inf'), float('inf')
+                            
+                            y_min_input.value, y_max_input.value = y_min, y_max
+                            y_min_input.min, y_min_input.max = y_min, y_max
+                            y_max_input.min, y_max_input.max = y_min, y_max
+            else:
+                y_filters.layout.display = 'none'
+                
+            # Save the new Y state
+            state['last_y_src'], state['last_y_col'] = y_src, y_col
+            
+        # Save overarching state
+        state['last_mode'], state['last_ch'] = mode, ch
+                    
+        state['updating'] = False
+        plot_data()
+
     def get_joined_data(mode, x_src, y_src, x_col, y_col, channel_label):
         '''Joins selected dashboard fields and applies an optional channel filter.
-
+        
         Args:
             mode (str): Analysis mode selected in the dashboard.
             x_src (str): Name of the requested X data source.
@@ -892,9 +1024,10 @@ def create_interactive_dashboard(data_catalog):
         '''
 
         # Retrieves the specific dataframes from the catalog using the channel label
+                
         df_x = data_catalog[mode][x_src][channel_label].copy()
         df_y = data_catalog[mode][y_src][channel_label].copy()
-        
+
         # Checks whether either dataframe is empty
         if df_x.empty or df_y.empty:
             return pd.DataFrame()
@@ -903,10 +1036,10 @@ def create_interactive_dashboard(data_catalog):
         df_x.columns = df_x.columns.astype(str)
         df_y.columns = df_y.columns.astype(str)
         x_col_str, y_col_str = str(x_col), str(y_col)
-        
+
         # Inner joins the dataframes on their index
         df_merged = pd.merge(df_x[[x_col_str]], df_y[[y_col_str]], left_index=True, right_index=True, how='inner', suffixes=('_x', '_y'))
-        
+
         # Handles column renaming if X and Y columns share the same name
         actual_x_col = x_col_str + '_x' if x_col_str == y_col_str else x_col_str
         actual_y_col = y_col_str + '_y' if x_col_str == y_col_str else y_col_str
@@ -915,8 +1048,12 @@ def create_interactive_dashboard(data_catalog):
         return df_merged.replace([np.inf, -np.inf], np.nan).dropna()
 
     def plot_data(*args):
-        '''Creates the dashboard scatter plot using the current widget selections.'''
+        '''Creates the dashboard scatter plot and conditionally filters Standard Curve data.'''
 
+        # Prevents redundant plotting cycles during chained updates
+        if state['updating']: 
+            return
+        
         # Opens the resource safely for processing
         with out:
 
@@ -926,22 +1063,21 @@ def create_interactive_dashboard(data_catalog):
             mode, channel = mode_toggle.value, channel_dropdown.value
             x_src, y_src = x_source_drop.value, y_source_drop.value
             x_col, y_col = x_col_drop.value, y_col_drop.value
-            
+
             # Displays an error if the selected columns are invalid
             if not x_col or not y_col:
-
                 print('Please select valid metrics to plot.')
 
                 return
-                
+            
             # Creates a new Plotly figure for the visualisation
             fig = go.Figure()
-            
+
             # Sets the active channels based on the dropdown selection
             channels_to_plot = ['Channel 1', 'Channel 2'] if channel == 'Both' else [channel]
             colors = {'Channel 1': '#1f77b4', 'Channel 2': '#ff1e0e'} 
             plotted_any = False
-            
+
             # Loops through each channel to plot its data
             for ch in channels_to_plot:
 
@@ -951,13 +1087,26 @@ def create_interactive_dashboard(data_catalog):
                 except Exception as e:
                     continue
                     
+                # Create a baseline mask allowing all data through
+                mask = pd.Series(True, index=plot_df.index)
+                
+                # Apply X filters ONLY if Standard Curve is selected for X
+                if x_src == 'Standard Curve':
+                    mask &= (plot_df['x_val'] >= x_min_input.value) & (plot_df['x_val'] <= x_max_input.value)
+                
+                # Apply Y filters ONLY if Standard Curve is selected for Y
+                if y_src == 'Standard Curve':
+                    mask &= (plot_df['y_val'] >= y_min_input.value) & (plot_df['y_val'] <= y_max_input.value)
+                
+                plot_df = plot_df[mask]
+
                 # Skips the channel if there are insufficient points for plotting
                 if len(plot_df) < 2: 
                     continue
 
                 plotted_any = True
                 x_data, y_data = plot_df['x_val'], plot_df['y_val']
-                
+
                 # Adds a scatter trace for the data points
                 fig.add_trace(go.Scatter(x=x_data, y=y_data, mode='markers', name=f'{ch}', marker=dict(size=8, opacity=0.7, color=colors[ch], line=dict(width=1, color='DarkSlateGrey')), text=plot_df.index, hovertemplate='Chip ID: %{text}<br>X: %{x:.4f}<br>Y: %{y:.4f}<extra></extra>'))
                 
@@ -969,36 +1118,41 @@ def create_interactive_dashboard(data_catalog):
                     y_fit = slope * x_fit + intercept
                     
                     fig.add_trace(go.Scatter(x=x_fit, y=y_fit, mode='lines', name=f'{ch} Fit (r={r_value:.3f}, R^2={r_value**2:.3f})', line=dict(color=colors[ch], dash='dash', width=2), hoverinfo='skip'))            
-            
+
             # Reports an error if no valid data was found for any channel
             if not plotted_any:
-
-                print('Not enough matching chip records to plot these selections.')
+                print('Not enough matching chip records to plot these selections within the specified filter bounds.')
 
                 return
-                
+            
             # Formats and displays the final interactive dashboard
             title = f'{y_src} [{y_col}] vs {x_src} [{x_col}]'
             fig.update_layout(title=title, xaxis_title=f'{x_src} : {x_col}', yaxis_title=f'{y_src} : {y_col}', template='plotly_white', height=600, margin=dict(l=40, r=40, t=60, b=40), hovermode='closest')
             fig.show()
 
-    # Binds observers to trigger plotting on widget changes
-    mode_toggle.observe(plot_data, 'value')
-    channel_dropdown.observe(plot_data, 'value')
-    x_source_drop.observe(plot_data, 'value')
-    y_source_drop.observe(plot_data, 'value')
-    x_col_drop.observe(plot_data, 'value')
-    y_col_drop.observe(plot_data, 'value')
+    # Binds appropriate observers to orchestrate the rendering cascade
+    channel_dropdown.observe(update_sources, 'value')
+    mode_toggle.observe(update_dropdowns, 'value')
+    x_source_drop.observe(update_dropdowns, 'value')
+    y_source_drop.observe(update_dropdowns, 'value')
+    x_col_drop.observe(update_filter_bounds, 'value')
+    y_col_drop.observe(update_filter_bounds, 'value')
     
-    # Organises the controls vertically
-    controls = widgets.VBox([mode_toggle, channel_dropdown, widgets.HBox([x_source_drop, x_col_drop]), widgets.HBox([y_source_drop, y_col_drop])])
+    # Bind the filters directly to the plot_data step, bypassing data re-extraction
+    x_min_input.observe(plot_data, 'value')
+    x_max_input.observe(plot_data, 'value')
+    y_min_input.observe(plot_data, 'value')
+    y_max_input.observe(plot_data, 'value')
+    
+    # Structure UI components
+    controls = widgets.VBox([mode_toggle, channel_dropdown, widgets.HBox([x_source_drop, x_col_drop]), x_filters, widgets.HBox([y_source_drop, y_col_drop]), y_filters])
     
     # Displays the dashboard elements
     display(widgets.HTML(f"<h3 style='margin-bottom:0px; color:#0000FF;'>Master Chip Comparison Dashboard</h3>"))
     display(controls, out)
 
-    # Invokes the initial plot
-    plot_data()
+    # Initialises the widget
+    update_sources()
 
 def get_top_drivers(df, chip_id, top_n=3):
     '''Identifies the features that most strongly distinguish a chip from its peers.
@@ -1031,9 +1185,25 @@ def get_top_drivers(df, chip_id, top_n=3):
 
 def prepare_section(df, stage_col, val_col):
 
+    '''Pivots the chip data and identifies outlier chips through anomaly detection.
+
+    Args:
+        df (pd.DataFrame): The input long-format dataframe containing chip metrics.
+        stage_col (str): The name of the column representing the processing stage or feature.
+        val_col (str): The name of the column containing the values to pivot.
+
+    Returns:
+        tuple[pd.DataFrame, list]: A tuple containing the pivoted wide-format dataframe and a list of identified outlier chip identifiers.
+    '''
+
+    # Pivots the data into a wide format using the specified stage and value columns
     pivoted = pivot_chip_data(df, stage_col, val_col)
-    anomalies = detect_anomalies(pivoted, pivoted.columns.tolist(), contamination='auto')
-    outliers = anomalies[anomalies['anomaly'] == -1].index.tolist() if not anomalies.empty else []
+
+    # Detects anomalies across all pivoted feature columns using automatic contamination scaling
+    anomalies = detect_anomalies(pivoted, pivoted.columns.tolist())
+
+    # Extracts the index identifiers for chips flagged as outliers
+    outliers = get_outlier_chips(anomalies)
 
     return pivoted, outliers
 
@@ -1171,10 +1341,18 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
         for chip in combined_all_fails:
             
             # Identifies the assigned cluster for the current chip
-            if chip in master_df.index.get_level_values('chip_id'):
-
-                chip_clusters = master_df.xs(chip, level='chip_id')['Cluster'].to_dict()
-                cluster_profile = ' | '.join([f'{ch}: Cluster {cl}' for ch, cl in chip_clusters.items()])
+            if chip in master_df.index.get_level_values(master_df.index.name or 'chip_id'):
+                
+                # Check if it's a MultiIndex (e.g., chip_id + channel)
+                if isinstance(master_df.index, pd.MultiIndex):
+                    chip_clusters = master_df.xs(chip, level='chip_id')['Cluster'].to_dict()
+                    cluster_profile = ' | '.join([f'{ch}: Cluster {cl}' for ch, cl in chip_clusters.items()])
+                
+                # If it's a flat index (just chip_id)
+                else:
+                    cl = master_df.loc[chip, 'Cluster']
+                    cluster_profile = f'Cluster {cl}'
+                    
             else:
                 cluster_profile = 'N/A (Incomplete Stage Data)'
                 
@@ -1506,34 +1684,104 @@ def plot_kinetic_curves(data, title):
     plt.tight_layout()
     plt.show()
 
-def plot_kobs_vs_conc(data, title):
-    '''Plots observed association rates against concentration.
+def plot_rates_vs_conc(data, title_prefix):
+    '''Plots k_obs, k_a, k_d, and K_D against concentration as sequential plots.
+    Includes all data points, even physically impossible negative values, for diagnostic purposes.
 
     Args:
-        data (dict): Kinetic results containing concentration and kobs.
-        title (str): Plot title.
+        data (dict): Kinetic results containing fits and global rates.
+        title_prefix (str): Prefix for the plot titles.
     '''
 
     # Extracts concentrations and observed association rates for successful fits
-    concs = [f['conc'] for f in data['fits'] if f['assoc_fit'] is not None]
+    concs_kobs = [f['conc'] for f in data['fits'] if f['assoc_fit'] is not None]
     kobs_vals = [f['assoc_fit'][1] for f in data['fits'] if f['assoc_fit'] is not None]
 
-    # Initialises the Matplotlib figure and plots the scatter points
+    if concs_kobs:
+
+        # Initialises the figure and plots the k_obs scatter points
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.scatter(concs_kobs, kobs_vals, color='tab:blue')
+
+        # Generates and plots the linear fit line if sufficient data exists
+        if len(concs_kobs) >= 2 and 'ka' in data:
+            
+            x_fit = np.linspace(0, max(concs_kobs), 50)
+            y_fit = data['ka'] * x_fit + data['kd']
+            ax.plot(x_fit, y_fit, '--', color='black', label=f"ka={data['ka']:.2e}, kd={data['kd']:.2e}")
+            ax.legend()
+
+        # Formats and displays the k_obs plot
+        ax.set_xlabel('Concentration (ug/ml)')
+        ax.set_ylabel('k_obs (s$^{-1}$)')
+        ax.set_title(f'{title_prefix} - k_obs')
+        ax.grid(True, linestyle='--', alpha=0.5)
+        plt.show()
+
+    # Initialises empty lists to store individual parameters
+    concs_params = []
+    ka_vals = []
+    kd_vals = []
+    KD_vals = []
+
+    # Loops through each generated curve fit to calculate individual rates
+    for f in data['fits']:
+
+        # Extracts parameters if both association and dissociation fits are successful
+        if f['assoc_fit'] is not None and f['dissoc_fit'] is not None and f['conc'] > 0:
+
+            kobs = f['assoc_fit'][1]
+            kd = f['dissoc_fit'][1]
+            ka_indiv = (kobs - kd) / f['conc']
+            
+            # Calculates KD, avoiding division by zero
+            KD_indiv = kd / ka_indiv if ka_indiv != 0 else np.nan
+            
+            concs_params.append(f['conc'])
+            ka_vals.append(ka_indiv)
+            kd_vals.append(kd)
+            KD_vals.append(KD_indiv)
+
+    # Skips the remaining plots if no valid data points exist
+    if not concs_params:
+
+        print("No valid fits available for additional parameter plots.")
+        return
+
+    # Initialises the figure and plots the ka scatter points
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.scatter(concs, kobs_vals, color='tab:blue')
-
-    # Generates values for the linear fit line
-    x_fit = np.linspace(0, max(concs), 50)
-    y_fit = data['ka'] * x_fit + data['kd']
-
-    # Plots the linear fit line and adds the equation to the legend
-    ax.plot(x_fit, y_fit, '--', color='black', label=f"ka={data['ka']:.2e}, kd={data['kd']:.2e}")
-
-    # Formats and displays the plot
+    ax.scatter(concs_params, ka_vals, color='tab:green')
+    
+    # Formats and displays the ka plot (Linear scale allows negatives)
     ax.set_xlabel('Concentration (ug/ml)')
-    ax.set_ylabel('k_obs (s$^{-1}$)')
-    ax.set_title(title)
-    ax.legend()
+    ax.set_ylabel('k_a (ug/ml*s)$^{-1}$')
+    ax.set_title(f'{title_prefix} - Association Rate (k_a)')
+    ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    plt.show()
+
+    # Initialises the figure and plots the kd scatter points
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(concs_params, kd_vals, color='tab:red')
+    
+    # Formats and displays the kd plot
+    ax.set_xlabel('Concentration (ug/ml)')
+    ax.set_ylabel('k_d (s$^{-1}$)')
+    ax.set_title(f'{title_prefix} - Dissociation Rate (k_d)')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    plt.show()
+
+    # Initialises  figure and plots the KD scatter points
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(concs_params, KD_vals, color='tab:purple')
+    
+    # Formats and displays the KD plot with a symmetrical logarithmic y-axis
+    ax.set_xlabel('Concentration (ug/ml)')
+    ax.set_ylabel('K_D (ug/ml)')
+    ax.set_title(f'{title_prefix} - Equilibrium Constant (K_D)')
+    ax.set_yscale('symlog')
+    ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+    ax.grid(True, linestyle='--', alpha=0.5)
     plt.show()
 
 def plot_binding_curves(data, title, pre_baseline_seconds=10, tail_avg_seconds=5):
@@ -1549,7 +1797,7 @@ def plot_binding_curves(data, title, pre_baseline_seconds=10, tail_avg_seconds=5
     # Extracts the raw sensorgram data
     sensor = data['sensor']
     
-    # Initialises the Matplotlib figure
+    # Initialises the figure
     fig, ax = plt.subplots(figsize=(10, 6))
     
     # Initialises the Plotly figure
@@ -1628,14 +1876,100 @@ def plot_binding_curves(data, title, pre_baseline_seconds=10, tail_avg_seconds=5
     plt.tight_layout()
     plt.show()
 
-def run_binding_kinetics_analysis(files):
+def plot_overall_rates_vs_conc(sc_data, title_prefix):
+    '''Plots boxplots and stripplots for individual kinetic rates (k_obs, k_a, k_d, K_D)
+    grouped by concentration across all assay measurements.
+
+    Args:
+        sc_data (list): A list of data dictionaries containing 'fits'.
+        title_prefix (str): Prefix for the plot titles.
+    '''
+    
+    records = []
+    
+    # Extracts the individual per-concentration rates from every chip in the dataset
+    for data in sc_data:
+
+        if 'fits' not in data:
+            continue
+            
+        for f in data['fits']:
+
+            if f['assoc_fit'] is not None and f['dissoc_fit'] is not None and f['conc'] > 0:
+
+                kobs = f['assoc_fit'][1]
+                kd = f['dissoc_fit'][1]
+                ka_indiv = (kobs - kd) / f['conc']
+                KD_indiv = kd / ka_indiv if ka_indiv != 0 else np.nan
+                
+                records.append({
+                    'Concentration': f['conc'],
+                    'k_obs': kobs,
+                    'k_a': ka_indiv,
+                    'k_d': kd,
+                    'K_D': KD_indiv
+                })
+    
+    # Validates that we successfully extracted data
+    if not records:
+
+        print("No individual per-concentration rates found across the dataset.")
+        return
+
+    # Converts to a DataFrame and sorts by concentration to ensure ordered x-axis categories
+    df = pd.DataFrame(records)
+    df = df.sort_values('Concentration')
+
+    # Defines the metrics, labels, and formatting rules
+    metrics = [
+        ('k_obs', 'k_obs (s$^{-1}$)', 'tab:blue', 'lightblue', False),
+        ('k_a', 'k_a (ug/ml*s)$^{-1}$', 'tab:green', 'lightgreen', False),
+        ('k_d', 'k_d (s$^{-1}$)', 'tab:red', 'lightcoral', False),
+        ('K_D', 'K_D (ug/ml)', 'tab:purple', '#d8b4e2', True)
+    ]
+
+    # Generates a separate grouped boxplot/stripplot for each metric
+    for col, ylabel, color, boxcolor, is_symlog in metrics:
+        
+        # Drops missing values for the specific metric being plotted
+        df_plot = df.dropna(subset=[col])
+
+        if df_plot.empty:
+            continue
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Seaborn automatically groups discrete x-values (Concentration) into categories
+        sns.boxplot(data=df_plot, x='Concentration', y=col, color=boxcolor, width=0.4, showfliers=False, ax=ax)
+        sns.stripplot(data=df_plot, x='Concentration', y=col, color=color, size=6, jitter=True, alpha=0.8, ax=ax)
+        
+        if is_symlog:
+            ax.set_yscale('symlog')
+            ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+        elif col == 'k_a':
+            ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+            
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel('Concentration (ug/ml)')
+        ax.set_title(f'{title_prefix} - {col} grouped by Concentration')
+        ax.grid(True, linestyle='--', alpha=0.5)
+        
+        plt.tight_layout()
+        plt.show()
+
+def run_binding_kinetics_analysis(files, assoc_duration=68.0, bulk_shift_skip=5.0, dissoc_duration=30.0):
     '''Computes binding kinetics (association/dissociation, global ka/kd/KD).
     
-    Correctly treats every flag as a new injection, automatically finding the 
-    peak to split the window into Association and Dissociation phases.
+    Uses a hybrid windowing approach:
+    1. Association: Fixed duration from start to avoid plateaus.
+    2. Dissociation: Dynamically finds the peak (bulk shift drop) for each measurement, 
+       skips the immediate drop, and fits a clean window of the tail.
 
     Args:
         files (dict): Processed sensorgram and flag data files.
+        assoc_duration (float): Seconds to fit for association (cuts off plateau).
+        bulk_shift_skip (float): Seconds to wait AFTER the peak drop before starting the fit.
+        dissoc_duration (float): How many seconds of pure dissociation tail to fit.
 
     Returns:
         dict: The updated kinetics results.
@@ -1650,18 +1984,18 @@ def run_binding_kinetics_analysis(files):
         # Skips folders containing baseline flags
         if 'baseline' in folder:
             continue
-            
+
         # Initialises an empty dictionary for the current folder
         kinetics_results[folder] = {}
         previous_file = ''
-        
+
         # Loops through each file in the folder
         for file in list(files[folder].keys()):
 
             # Processes only sensorgram files
             if 'sensorgram' in file:
 
-                # Extracts and sorts the sensorgram and flag data chronologically
+                # Extracts and sorts the sensorgram and flag data chronologically         
                 sensor = files[folder][file].sort_values('time').reset_index(drop=True)
                 flags = files[folder][previous_file].sort_values('time').reset_index(drop=True)
                 sensor['response'] = sensor['channel1']
@@ -1670,7 +2004,6 @@ def run_binding_kinetics_analysis(files):
 
                 # Loops through each row in the flags dataframe to extract concentrations
                 for _, row in flags.iterrows():
-
                     conc_val = parse_conc_flag(row['conc'])
 
                     # Appends valid concentration events to the parsed list
@@ -1681,16 +2014,16 @@ def run_binding_kinetics_analysis(files):
                 median_time_step = sensor['time'].diff().median()
                 lookahead_rows = max(1, int(5 / median_time_step))
                 
-                # Loops through each parsed event to delineate association and dissociation segments
+                # Loops through each parsed event to delineate segments
                 for i, event in enumerate(parsed):
 
                     t_start = event['time']
                     t_next = parsed[i+1]['time'] if i + 1 < len(parsed) else sensor['time'].max()
-                    
+
                     # Isolates the sensorgram zone for the current event
                     zone = sensor[(sensor['time'] >= t_start) & (sensor['time'] <= t_next)]
-
-                    # Skips the segment if there are insufficient data points
+                    
+                    # Skips segment if there are insufficient data points
                     if len(zone) < lookahead_rows + 5: 
                         continue
                         
@@ -1700,45 +2033,31 @@ def run_binding_kinetics_analysis(files):
                     # Falls back to an immediate shift if the initial drop size is empty
                     if drop_size.dropna().empty:
                         drop_size = zone['response'] - zone['response'].shift(-1)
-                        
+                    
                     # Identifies the index of the maximum drop size
                     peak_idx = drop_size.idxmax()
-                    
+
                     # Defaults to the absolute maximum peak if the delta check yields NaN
                     if pd.isna(peak_idx):
                         peak_idx = zone['response'].idxmax()
                         
                     t_peak = sensor.loc[peak_idx, 'time']
                     
-                    # Isolates the candidate dissociation zone
-                    dissoc_candidate = sensor[(sensor['time'] > t_peak) & (sensor['time'] <= t_next)]
-
-                    # Processes the dissociation zone if it contains data
-                    if not dissoc_candidate.empty:
-                        
-                        # Caps the dissociation window at 60 seconds
-                        t_cap = t_peak + 60.0
-                        dissoc_candidate = dissoc_candidate[dissoc_candidate['time'] <= t_cap]
-                        
-                        # Pinpoints a secondary dissociation event using differential gradients
-                        diffs = dissoc_candidate['response'].diff()
-                        spike_idx = diffs[diffs > 0.5].first_valid_index()
-                        
-                        # Sets the dissociation end time based on the detected spike or maximum time
-                        if spike_idx is not None:
-                            t_dissoc_end = sensor.loc[spike_idx, 'time'] - 2.0
-                        else:
-                            t_dissoc_end = dissoc_candidate['time'].max()
-                    else:
-                        t_dissoc_end = t_next
+                    # Sets association start and end time window
+                    t_assoc_start = t_start
+                    t_assoc_end = t_start + assoc_duration 
                     
+                    # Sets disociation start and end time window
+                    t_dissoc_start = t_peak + bulk_shift_skip
+                    t_dissoc_end = t_dissoc_start + dissoc_duration
+
                     # Appends the calculated segment boundaries
                     segments.append({
                         'conc': event['conc'], 
                         'meas_id': event['label'], 
-                        't_assoc_start': t_start,
-                        't_assoc_end': t_peak,
-                        't_dissoc_start': t_peak,
+                        't_assoc_start': t_assoc_start,
+                        't_assoc_end': t_assoc_end,
+                        't_dissoc_start': t_dissoc_start,
                         't_dissoc_end': t_dissoc_end
                     })
 
@@ -1769,7 +2088,6 @@ def run_binding_kinetics_analysis(files):
 
                 # Attempts a linear regression if multiple valid concentrations exist
                 if len(concs) >= 2:
-
                     slope, intercept, r_value, _, _ = linregress(concs, kobs_vals)
                     ka = slope
                     kd_from_intercept = intercept
@@ -1788,17 +2106,16 @@ def run_binding_kinetics_analysis(files):
 
                 # Assigns the compiled data to the kinetics results dictionary
                 kinetics_results[folder][file] = file_data
-            
+
             # Updates the previous file tracker
             previous_file = file
-
 
     # Loops through each folder and its assigned files in the kinetics results
     for folder, folder_files in kinetics_results.items():
 
         # Prints the section header
         print(f"\n{'='*40}\nKinetics Analysis: {folder}\n{'='*40}")
-        
+
         summary_rows = []
 
         # Loops through each file and its data content
@@ -1812,10 +2129,9 @@ def run_binding_kinetics_analysis(files):
                     'kd_dissoc_mean (s^-1)': data.get('kd_dissoc_mean', np.nan),
                     'KD (ug/ml)': data['KD'], 'kobs_fit_R2': data['kobs_r2']
                 })
-        
+
         # Displays the results in a collapsible output section if data exists
         if summary_rows:
-
             with collapsible_output(f'Global Kinetics Summary: {folder}'):
                 display(pd.DataFrame(summary_rows))
 
@@ -1825,7 +2141,7 @@ def run_binding_kinetics_analysis(files):
             # Skips files without valid fits
             if 'fits' not in data: 
                 continue
-            
+
             # Extracts the chip and measurement identifiers from the filename
             clean_filename = file.replace('Copy of ', '').strip()
             parts = clean_filename.split('_')
@@ -1833,14 +2149,13 @@ def run_binding_kinetics_analysis(files):
             measurement_id = parts[1] if len(parts) > 1 else 'Unknown'
             
             print(f'\n--- Chip ID: {chip_id} | Measurement ID: {measurement_id} ---')
-
             per_conc_rows = []
 
             # Loops through each generated curve fit
             for f in data['fits']:
 
                 warning = ''
-                
+                                
                 # Unpacks association parameters
                 Req, kobs, R0 = (f['assoc_fit'][0], f['assoc_fit'][1], f['assoc_fit'][2]) if f['assoc_fit'] is not None else (np.nan, np.nan, np.nan)
 
@@ -1872,7 +2187,7 @@ def run_binding_kinetics_analysis(files):
                     'Measurement': f['meas_id'], 'Concentration (ug/ml)': f['conc'], 'k_obs (s^-1)': kobs,
                     'k_d (s^-1)': kd, 'k_a (calc)': ka_indiv, 'K_D': KD_indiv, 'R_eq': Req, 'Warning': warning.strip('; ')
                 })
-                
+
             # Displays the results in a collapsible output section if concentration rows exist
             if per_conc_rows:
 
@@ -1883,17 +2198,33 @@ def run_binding_kinetics_analysis(files):
 
             # Displays the kinetic fit curves in a collapsible output section
             with collapsible_output(f'Kinetic Fit Curves: {file}'):
-                plot_kinetic_curves(data, f'Kinetic Curves — {chip_id}')
+                plot_kinetic_curves(data, f'Kinetic Curves - {chip_id}')
 
-            # Displays the observed rates against concentration in a collapsible output section
+            # Displays all kinetic parameters against concentration sequentially
             if 'ka' in data:
-
-                with collapsible_output(f'K_obs vs Concentration: {file}'):
-                    plot_kobs_vs_conc(data, f'k_obs vs Concentration — {chip_id}')
+                with collapsible_output(f'Rates vs Concentration: {file}'):
+                    plot_rates_vs_conc(data, f'Rates vs Concentration - {chip_id}')
 
             # Displays the aligned binding curves in a collapsible output section
-            with collapsible_output(f'Aligned Binding Curves: {file}'):
-                plot_binding_curves(data, f'Binding Curves Overlay — {chip_id}')
+            with collapsible_output(f'Binding Curves: {file}'):
+                plot_binding_curves(data, f'Binding Curves Overlay - {chip_id}')
+
+    # Extracts all individual data dictionaries that contain fits and global rates
+    all_global_data = []
+
+    for folder, folder_files in kinetics_results.items():
+
+        for file, data in folder_files.items():
+
+            if 'fits' in data:
+                all_global_data.append(data)
                 
-    # Returns the final updated dictionary
+    # Checks if valid data was found across the analysis
+    if all_global_data:
+        print(f"\n{'='*40}\nOverall Kinetics Distributions\n{'='*40}")
+            
+        # Plots the Per-Concentration rate distributions (multiple values per chip grouped by conc)
+        with collapsible_output('Overall Distributions by Concentration'):
+            plot_overall_rates_vs_conc(all_global_data, 'Overall')
+                
     return kinetics_results
