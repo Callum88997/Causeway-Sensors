@@ -1196,8 +1196,11 @@ def prepare_section(df, stage_col, val_col):
         tuple[pd.DataFrame, list]: A tuple containing the pivoted wide-format dataframe and a list of identified outlier chip identifiers.
     '''
 
+    # Filters out non-informative startup stages
+    filtered_df = df[~df[stage_col].isin(['Start', 'Initial'])]
+
     # Pivots the data into a wide format using the specified stage and value columns
-    pivoted = pivot_chip_data(df, stage_col, val_col)
+    pivoted = pivot_chip_data(filtered_df, stage_col, val_col)
 
     # Detects anomalies across all pivoted feature columns using automatic contamination scaling
     anomalies = detect_anomalies(pivoted, pivoted.columns.tolist())
@@ -1207,7 +1210,7 @@ def prepare_section(df, stage_col, val_col):
 
     return pivoted, outliers
 
-def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips, section_config, title='Overall At-Risk Chips Summary'):
+def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips, section_config, incomplete_chips=None, title='Overall At-Risk Chips Summary'):
     '''Clusters chips based on combined stage data, cross-references against standard curve metrics, and generates a structured summary report across 5 distinct sections.
 
     Args:
@@ -1216,8 +1219,15 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
         sc_raw_df (pd.DataFrame): Raw standard curve data.
         all_at_risk_chips (list): List of all chips identified as at-risk.
         section_config (dict): Configuration mapping for different summary sections.
+        incomplete_chips (set/list, optional): Chips identified as having incomplete datasets.
         title (str, optional): The title for the summary. Defaults to 'Overall At-Risk Chips Summary'.
     '''
+
+    # Initialises incomplete chips as an empty set if not provided
+    if incomplete_chips is None:
+        incomplete_chips = set()
+    else:
+        incomplete_chips = set(incomplete_chips)
 
     # Creates channel-order variables for the comparison results
     pel_unique = set()
@@ -1265,6 +1275,11 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
             print(f'Total Unique PEL Fails: {len(pel_unique)}')
             print(f'Total Unique Immobilisation Fails: {len(immob_unique)}')
             print(f'Total Unique Standard Curve Fails: {len(sc_fails)}')
+
+            print(f'Total Unique Incomplete Chips: {len(incomplete_chips)}')
+            
+            if incomplete_chips:
+                print(f"  - Incomplete Chip IDs: {', '.join(map(str, sorted(list(incomplete_chips))))}")
         else:
             print('No faults detected across any stage. Everything looks normal!')
 
@@ -1272,6 +1287,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
     with collapsible_output(f'{title} - PEL Breakdown'):
 
         print(f'Total Unique PEL Faulty Chips: {len(pel_unique)}')
+        print(pel_unique, '\n')
 
         # Expands the individual sections triggered within PEL
         if pel_unique:
@@ -1286,6 +1302,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
     with collapsible_output(f'{title} - Immobilisation Breakdown'):
 
         print(f'Total Unique Immobilisation Faulty Chips: {len(immob_unique)}')
+        print(immob_unique, '\n')
 
         # Expands the individual sections triggered within Immobilisation
         if immob_unique:
