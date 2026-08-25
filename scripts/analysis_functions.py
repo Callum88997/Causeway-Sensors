@@ -10,7 +10,7 @@ from IPython.display import display
 import re
 from scipy.optimize import curve_fit
 
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler
 from sklearn.ensemble import IsolationForest
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
@@ -18,7 +18,7 @@ from scipy.stats import linregress
 
 from scripts.setup_functions import collapsible_output
 
-def detect_anomalies(df, feature_cols, contamination='auto'):
+"""def detect_anomalies(df, feature_cols, contamination='auto'): # 0.07
     '''Applies an Isolation Forest to detect multivariate outliers.
 
     Args:
@@ -34,25 +34,99 @@ def detect_anomalies(df, feature_cols, contamination='auto'):
     df_clean = df.dropna(subset=feature_cols).copy()
     
     # Checks whether the dataframe contains data
-    if df_clean.empty:
+    if df_clean.empty or len(df_clean) < 2:
+
+        df_clean['anomaly'] = 1
+        df_clean['anomaly_score'] = 0.0
+
         return df_clean
-        
+    
     # Initialises the scaler and standardises the features
-    scaler = StandardScaler()
+    scaler = RobustScaler()
     X_scaled = scaler.fit_transform(df_clean[feature_cols])
     
     # Initialises and fits the Isolation Forest model
-    iso = IsolationForest(contamination=contamination, random_state=8030)
+    iso = IsolationForest(n_estimators=500, contamination=contamination, random_state=8030)
+
     df_clean['anomaly'] = iso.fit_predict(X_scaled)
     df_clean['anomaly_score'] = iso.decision_function(X_scaled)
     
     return df_clean
+"""
+
+def detect_anomalies(df, feature_cols, stages=None, contamination='auto'):
+    '''Applies an Isolation Forest to detect multivariate outliers robustly.
+    If stages are provided, evaluates each stage independently to prevent score dilution.
+
+    Args:
+        df (pd.DataFrame): The dataframe to analyse.
+        feature_cols (list[str]): The list of feature columns to evaluate.
+        stages (list[str], optional): Known stages to evaluate independently. Defaults to None.
+        contamination (str | float, optional): The proportion of outliers. Defaults to 0.05.
+
+    Returns:
+        pd.DataFrame: The dataframe with 'anomaly' (-1 for outlier, 1 for inlier) and 'anomaly_score'.
+    '''
+    df_clean = df.copy()
+    
+    # If stages are provided, evaluate each stage independently
+    if stages:
+        worst_scores = pd.Series(index=df_clean.index, data=np.inf)
+        is_anomaly = pd.Series(index=df_clean.index, data=1)
+        
+        for stage in stages:
+            # Dynamically find columns that belong to this exact stage
+            stage_cols = [c for c in feature_cols if c == stage or str(c).rsplit('_', 1)[0] == stage]
+            
+            if not stage_cols: 
+                continue
+                
+            # Impute missing values for this specific stage
+            df_stage = df_clean[stage_cols].fillna(df_clean[stage_cols].median())
+            
+            if df_stage.empty or len(df_stage) < 2:
+                continue
+                
+            scaler = RobustScaler()
+            X_scaled = scaler.fit_transform(df_stage)
+            
+            iso = IsolationForest(n_estimators=500, contamination=contamination, random_state=8030)
+            preds = iso.fit_predict(X_scaled)
+            scores = iso.decision_function(X_scaled)
+            
+            # Keep the lowest (most anomalous) score for each chip
+            current_scores = pd.Series(scores, index=df_clean.index)
+            worst_scores = np.minimum(worst_scores, current_scores)
+            
+            # If a chip fails ANY stage, flag it as an anomaly (-1)
+            is_anomaly = np.where(preds == -1, -1, is_anomaly)
+            
+        # Clean up the infinite initialization fallback
+        worst_scores.replace(np.inf, 0.0, inplace=True)
+        
+        df_clean['anomaly'] = is_anomaly
+        df_clean['anomaly_score'] = worst_scores
+        
+    else:
+        # Fallback to global detection (original behavior)
+        df_clean[feature_cols] = df_clean[feature_cols].fillna(df_clean[feature_cols].median())
+        
+        if df_clean.empty or len(df_clean) < 2:
+            df_clean['anomaly'] = 1
+            df_clean['anomaly_score'] = 0.0
+            return df_clean
+            
+        scaler = RobustScaler()
+        X_scaled = scaler.fit_transform(df_clean[feature_cols])
+        
+        iso = IsolationForest(n_estimators=500, contamination=contamination, random_state=8030)
+        df_clean['anomaly'] = iso.fit_predict(X_scaled)
+        df_clean['anomaly_score'] = iso.decision_function(X_scaled)
+        
+    return df_clean
 
 def pivot_chip_data(df, stage_col, val_col):
-    '''Pivots data for anomaly detection. 
-    
-    If a 'Channel' column exists, it uses both chip_id and Channel as the row index, 
-    effectively treating each channel as an independent observation (doubling the dataset size).
+    '''Pivots data for anomaly detection.
 
     Args:
         df (pd.DataFrame): The dataframe to pivot.
@@ -62,13 +136,8 @@ def pivot_chip_data(df, stage_col, val_col):
     Returns:
         pd.DataFrame: The pivoted dataframe.
     '''
-
-    # Checks for the presence of the 'Channel' column to determine the pivot index
-    if 'Channel' in df.columns:
-        return df.pivot_table(index=['chip_id', 'Channel'], columns=stage_col, values=val_col, aggfunc='mean', observed=False)
-    else:
-        return df.pivot_table(index='chip_id', columns=stage_col, values=val_col, aggfunc='mean', observed=False)
-    
+    return df.pivot_table(index='chip_id', columns=stage_col, values=val_col, aggfunc='mean', observed=False)
+   
 def summarise_correlations(corr_matrix, label, num=3):
     '''Summarises the strongest positive, strongest negative, and weakest correlations.
 
@@ -146,7 +215,6 @@ def analyse_anomaly_drivers(df, anomalies_df, label, num=3):
 
         print('No anomalies detected. All chips are behaving within normal bounds.')
         
-        # Returns control to the calling code
         return
 
     # Checks if there is a sufficient baseline of normal chips
@@ -154,7 +222,6 @@ def analyse_anomaly_drivers(df, anomalies_df, label, num=3):
 
         print('Not enough normal chips to form a baseline for comparison.')
         
-        # Returns control to the calling code
         return
 
     # Slices the data into normal and anomaly subsets
@@ -179,32 +246,35 @@ def analyse_anomaly_drivers(df, anomalies_df, label, num=3):
         anom_val = anomaly_mean[stage]
         print(f'  - {stage}: Anomaly Avg = {anom_val:.3f} | Normal Avg = {norm_val:.3f} (Z-Score: {z:.2f})')
 
-def create_wide_intra(intra_df, val_col):
+def create_wide_intra(intra_df, val_col, keep_metrics=['std']):
     '''Pivots multiple intra-stage metrics and suffixes columns to prevent overlap.
+    Dynamically identifies all metric columns belonging to the target channel.
 
     Args:
         intra_df (pd.DataFrame): The dataframe containing intra-stage features.
         val_col (str): The base value column used to derive metric names.
+        keep_metrics (list[str], optional): Suffixes of metrics to keep.
 
     Returns:
         pd.DataFrame: The pivoted wide-format dataframe.
     '''
 
-    # Defines the metrics to extract based on the target column
-    intra_metrics = [f'{val_col}_std']#, f'{val_col}_spike_to_noise_ratio', f'{val_col}_max_residual_zscore']
+    # Dynamically finds all columns that start with the target channel's name
+    intra_metrics = [col for col in intra_df.columns if col.startswith(f'{val_col}_') and col.replace(f'{val_col}_', '') in keep_metrics and col not in ['chip_id', 'stage']]
 
     wide_list = []
     
     # Loops through each required metric
     for metric in intra_metrics:
 
-        # Processes the metric if it exists in the dataframe
-        if metric in intra_df.columns:
-
-            wide_metric = pivot_chip_data(intra_df, 'stage', metric)
-            metric_suffix = metric.replace(f'{val_col}_', '')
-            wide_metric.columns = [f'{col}_{metric_suffix}' for col in wide_metric.columns]
-            wide_list.append(wide_metric)
+        wide_metric = pivot_chip_data(intra_df, 'stage', metric)
+        
+        # Extracts just the statistical suffix (e.g., 'std', 'slope', 'skew')
+        metric_suffix = metric.replace(f'{val_col}_', '')
+        
+        # Appends the suffix to the wide column names to prevent overlap
+        wide_metric.columns = [f'{col}_{metric_suffix}' for col in wide_metric.columns]
+        wide_list.append(wide_metric)
             
     # Concatenates and returns the wide list if it contains data
     return pd.concat(wide_list, axis=1) if wide_list else pd.DataFrame()
@@ -254,22 +324,24 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
 
     # Filters out non-informative startup stages
     events_df = events_df[~events_df['stage'].isin(['Start', 'Initial'])]
-    
+
+    unique_stages = events_df['stage'].unique().tolist()
+
     # Pivots the tables to prepare for anomaly detection
     wide_events = pivot_chip_data(events_df, 'stage', val_col)
     wide_changes = pivot_chip_data(changes_df, 'stage', change_col)
     wide_intra = create_wide_intra(intra_df, intra_target)
 
     # Detects absolute signal anomalies
-    anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist())
+    anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist(), unique_stages)
     outliers_abs = get_outlier_chips(anomalies_abs)
 
     # Detects stage delta anomalies
-    anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist())
+    anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist(), unique_stages)
     outliers_delta = get_outlier_chips(anomalies_delta)
 
     # Detects intra-stage kinetic anomalies
-    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
+    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist(), unique_stages)
     outliers_intra = get_outlier_chips(anomalies_intra)
 
     # Displays the results in a collapsible output section
@@ -314,7 +386,8 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
         print(f'\nPotential Anomalous Chips (Intra-stage Kinetics): {len(outliers_intra)}')
         analyse_anomaly_drivers(wide_intra, anomalies_intra, f'PEL {intra_target} Intra-stage Kinetics')
 
-    return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra
+    return anomalies_abs, anomalies_delta, anomalies_intra, outliers_abs, outliers_delta, outliers_intra
+    #return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra
 
 def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='channel1', change_col='channel1_change', intra_val_col=None, title='Immobilisation Analysis'):
     '''Analyses one immobilisation split across signal, delta, and kinetic features.
@@ -339,21 +412,23 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
     # Filters out non-informative startup stages
     events_df = events_df[~events_df['stage'].isin(['Start', 'Initial'])]
 
+    unique_stages = events_df['stage'].unique().tolist()
+    
     # Pivots the tables to prepare for anomaly detection
     wide_events = pivot_chip_data(events_df, 'stage', val_col)
     wide_changes = pivot_chip_data(changes_df, 'stage', change_col)
     wide_intra = create_wide_intra(intra_df, intra_target)
 
     # Detects absolute signal anomalies
-    anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist())
+    anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist(), unique_stages)
     outliers_abs = get_outlier_chips(anomalies_abs)
 
     # Detects stage delta anomalies
-    anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist())
+    anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist(), unique_stages)
     outliers_delta = get_outlier_chips(anomalies_delta)
 
     # Detects intra-stage kinetic anomalies
-    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
+    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist(), unique_stages)
     outliers_intra = get_outlier_chips(anomalies_intra)
 
     # Displays the results in a collapsible output section
@@ -398,77 +473,68 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
     
     return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra
 
-def plot_pel_layer_shifts(pel_changes, channels_dict=None):
+def plot_pel_layer_shifts(change_wide_df, channel_name='quad_ch1'):
     '''Plots PEL signal shifts between layers for each requested channel.
 
     Args:
-        pel_changes (pd.DataFrame): PEL stage-transition measurements.
-        channels_dict (dict | None, optional): Display-name to signal-column mapping. Defaults to None.
+        change_wide_df (pd.DataFrame): Wide-format PEL stage-transition measurements (rows=chip_id, cols=stages).
+        channel_name (str, optional): Name of the channel for the plot title. Defaults to 'quad_ch1'.
     '''
-
-    # Initialises the default channel dictionary if none is provided
-    if channels_dict is None:
-        channels_dict = {
-            'Channel 1': 'quad_ch1_change',
-            'Channel 2': 'quad_ch2_change'
-        }
     
     # Creates a copy of the dataframe to preserve the original data, filtering out the total shift
-    df_plot = pel_changes[pel_changes['stage'] != 'Total_Shift_Initial_to_Final'].copy()
+    layer_cols = [col for col in change_wide_df.columns if col != 'Total_Shift_Initial_to_Final']
+    df_plot = change_wide_df[layer_cols].copy()
 
-    # Loops through each key-value pair in the channel dictionary
-    for ch_name, ch_col in channels_dict.items():
+    # Displays the results in a collapsible output section
+    with collapsible_output(f'PEL Layer Shifts: {channel_name}'):
+        
+        # Plots an interactive view of signal shifts across PEL layer transitions for each chip
+        fig = go.Figure()
+        
+        # Loops through each grouped chip ID and its associated dataframe
+        for chip_id, row in df_plot.iterrows():
 
-        # Displays the results in a collapsible output section
-        with collapsible_output(f'PEL Layer Shifts: {ch_name}'):
-            
-            # Plots an interactive view of signal shifts across PEL layer transitions for each chip
-            fig = go.Figure()
-            
-            # Loops through each grouped chip ID and its associated dataframe
-            for chip_id, df_chip in df_plot.groupby('chip_id'):
+            fig.add_trace(go.Scatter(
+                x=layer_cols, 
+                y=row[layer_cols], 
+                mode='lines+markers', 
+                name=str(chip_id), 
+                opacity=0.6, 
+                marker=dict(size=6), 
+                visible='legendonly'
+            ))
 
-                fig.add_trace(go.Scatter(
-                    x=df_chip['stage'], 
-                    y=df_chip[ch_col], 
-                    mode='lines+markers', 
-                    name=str(chip_id), 
-                    opacity=0.6, 
-                    marker=dict(size=6), 
-                    visible='legendonly'
-                ))
+        fig.update_layout(
+            title=f'PEL Layer Build-up: Shift per Transition ({channel_name})', 
+            xaxis_title='Layer Transition', 
+            yaxis_title='Signal Shift (Δ)', 
+            template='plotly_white', 
+            hovermode='x unified', 
+            height=600
+        )
 
-            fig.update_layout(
-                title=f'PEL Layer Build-up: Shift per Transition ({ch_name})', 
-                xaxis_title='Layer Transition', 
-                yaxis_title='Signal Shift (Δ)', 
-                template='plotly_white', 
-                hovermode='x unified', 
-                height=600
-            )
+        fig.update_xaxes(tickangle=45)
+        fig.show()
 
-            fig.update_xaxes(tickangle=45)
-            fig.show()
+        # Plots a static view of signal shifts across PEL layer transitions for each chip
+        plt.figure(figsize=(10, 6))
+        
+        # Loops through each grouped chip ID and its associated dataframe
+        for chip_id, row in df_plot.iterrows():
+            plt.plot(layer_cols, row[layer_cols], marker='o', alpha=0.5, label=chip_id)
 
-            # Plots a static view of signal shifts across PEL layer transitions for each chip
-            plt.figure(figsize=(10, 6))
-            
-            # Loops through each grouped chip ID and its associated dataframe
-            for chip_id, df_chip in df_plot.groupby('chip_id'):
-                plt.plot(df_chip['stage'], df_chip[ch_col], marker='o', alpha=0.5, label=chip_id)
+        plt.title(f'PEL Layer Build-up: Shift per Transition ({channel_name})')
+        plt.xlabel('Layer Transition')
+        plt.ylabel('Signal Shift (Δ)')
+        plt.xticks(rotation=45)
+        plt.grid(True, alpha=0.3)
 
-            plt.title(f'PEL Layer Build-up: Shift per Transition ({ch_name})')
-            plt.xlabel('Layer Transition')
-            plt.ylabel('Signal Shift (Δ)')
-            plt.xticks(rotation=45)
-            plt.grid(True, alpha=0.3)
+        # Adds a legend if the number of unique chips is manageable
+        if len(df_plot.index) <= 25:
+            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
 
-            # Adds a legend if the number of unique chips is manageable
-            if df_plot['chip_id'].nunique() <= 25:
-                plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-
-            plt.tight_layout()
-            plt.show()
+        plt.tight_layout()
+        plt.show()
 
 def combine_anomalies(*outliers_lists, title='Combined Anomalies Summary'):
     '''Combines an arbitrary number of outlier lists into a single set.
@@ -502,263 +568,215 @@ def combine_anomalies(*outliers_lists, title='Combined Anomalies Summary'):
 
     return all_outlier_chips
 
-def analyse_cross_stage_split(pel_df, immob_df, split_name, pel_outliers=None, immob_outliers=None, sc_metrics_df=None, title='Cross-Stage Validation'):
+def analyse_cross_stage_split(pel_df, immob_df, split_name, channel_name, pel_outliers=None, immob_outliers=None, sc_metrics_df=None, title='Cross-Stage Validation'):
     '''Merges PEL and a specific immobilisation split, runs PCA and clustering, plots the results with anomaly highlights for Channel 1, Channel 2, and overall. Validates against standard curves if provided.
 
     Args:
         pel_df (pd.DataFrame): The wide-format PEL dataframe.
         immob_df (pd.DataFrame): The wide-format immobilisation dataframe.
         split_name (str): The label for the current data split.
+        channel_name (str): The name of the current channel.
         pel_outliers (list, optional): List of outlier chips from PEL analysis. Defaults to None.
         immob_outliers (list, optional): List of outlier chips from immobilisation analysis. Defaults to None.
         sc_metrics_df (pd.DataFrame, optional): Standard curve metrics for validation. Defaults to None.
         title (str, optional): The title for the summary output. Defaults to 'Cross-Stage Validation'.
     '''
     
-    # Creates a copy of the PEL dataframe to preserve the original data
+    # Creates copies to preserve original data
     pel_copy = pel_df.copy()
-    # Creates a copy of the immobilisation dataframe to preserve the original data
     immob_copy = immob_df.copy()
     
     # Ensures column names are treated as strings
     pel_copy.columns = pel_copy.columns.astype(str)
     immob_copy.columns = immob_copy.columns.astype(str)
 
-    # Defines a mapping to normalise channel names across datasets
-    channel_mapping = {
-        'quad_ch1': 'Ch1', 'channel1': 'Ch1',
-        'quad_ch2': 'Ch2', 'channel2': 'Ch2',
-        'quad_ch1_change': 'Ch1', 'channel1_change': 'Ch1',
-        'quad_ch2_change': 'Ch2', 'channel2_change': 'Ch2'
-    }
-
-    # Renames MultiIndex levels if they contain a Channel index
-    if isinstance(pel_copy.index, pd.MultiIndex) and 'Channel' in pel_copy.index.names:
-        pel_copy = pel_copy.rename(index=channel_mapping, level='Channel')
-        
-    if isinstance(immob_copy.index, pd.MultiIndex) and 'Channel' in immob_copy.index.names:
-        immob_copy = immob_copy.rename(index=channel_mapping, level='Channel')
-
     # Merges the PEL and immobilisation datasets
     merged = pd.merge(pel_copy, immob_copy, left_index=True, right_index=True, how='inner', suffixes=('_PEL', '_Immob')).dropna()
     
     # Checks whether the merged dataframe contains data
     if merged.empty:
-        print(f'[{split_name}] Not enough overlapping chips between PEL and Immobilisation for cross-analysis.')
+        print(f'[{split_name} - {channel_name}] Not enough overlapping chips between PEL and Immobilisation for cross-analysis.')
         
         # Returns control to the calling code
         return
+             
+    # Displays the results in a collapsible output section
+    with collapsible_output(f'{title} - {channel_name}'):
+
+        print(f'[{split_name} - {channel_name}] Overlapping chips analysed: {len(merged)}')
         
-    # Combines outliers from both stages into a single set
-    both_anomalies = set(pel_outliers if pel_outliers else []).union(set(immob_outliers if immob_outliers else []))
+        # Standardises the features
+        features = merged.columns.tolist()
+        X_subset = RobustScaler().fit_transform(merged[features])
+        
+        # Initialises and applies PCA for dimensionality reduction
+        pca = PCA(n_components=2)
+        pca_result = pca.fit_transform(X_subset)
+        
+        # Gets each Principal Component values
+        merged['PCA1'] = pca_result[:, 0]
+        merged['PCA2'] = pca_result[:, 1]
+        
+        print(f'[{split_name} - {channel_name}] Explained Variance by first 2 components: {pca.explained_variance_ratio_.sum()*100:.2f}%')
+        
+        # Initialises and fits KMeans clustering
+        kmeans = KMeans(n_clusters=2, random_state=8030, n_init=10)
+        merged['Cluster'] = kmeans.fit_predict(X_subset)
+        
+        # Plots the first two principal components to show cluster separation and flagged anomalies
+        plt.figure(figsize=(10, 6))
+        sns.scatterplot(data=merged, x='PCA1', y='PCA2', hue='Cluster', palette='Set1', s=100, alpha=0.7)
 
-    def analyse_subset(subset_df, label):
-        '''Runs PCA, clustering, and validation for one channel subset.
-
-        Args:
-            subset_df (pd.DataFrame): Merged features for the selected subset.
-            label (str): Human-readable subset label.
-        '''
-
-        # Checks whether the subset dataframe contains data
-        if subset_df.empty:
+        # Combines outliers from both stages into a single set
+        both_anomalies = set(pel_outliers if pel_outliers else []).union(set(immob_outliers if immob_outliers else []))
             
-            # Returns control to the calling code
-            return
-            
-        # Displays the results in a collapsible output section
-        with collapsible_output(f'{title} - {label}'):
-
-            print(f'[{split_name} - {label}] Overlapping chips analysed: {len(subset_df)}')
-            
-            # Standardises the features
-            features = subset_df.columns.tolist()
-            X_subset = StandardScaler().fit_transform(subset_df[features])
-            
-            # Initialises and applies PCA for dimensionality reduction
-            pca = PCA(n_components=2)
-            pca_result = pca.fit_transform(X_subset)
-            
-            # Creates a copy of the dataframe to plot to preserve the original data
-            df_to_plot = subset_df.copy()
-            df_to_plot['PCA1'] = pca_result[:, 0]
-            df_to_plot['PCA2'] = pca_result[:, 1]
-            
-            print(f'[{split_name} - {label}] Explained Variance by first 2 components: {pca.explained_variance_ratio_.sum()*100:.2f}%')
-            
-            # Initialises and fits KMeans clustering
-            kmeans = KMeans(n_clusters=2, random_state=8030, n_init=10)
-            df_to_plot['Cluster'] = kmeans.fit_predict(X_subset)
-            
-            # Plots the first two principal components to show cluster separation and flagged anomalies
-            plt.figure(figsize=(10, 6))
-            sns.scatterplot(data=df_to_plot, x='PCA1', y='PCA2', hue='Cluster', palette='Set1', s=100, alpha=0.7)
-            
-            # Extracts chip IDs based on the index type
-            if isinstance(df_to_plot.index, pd.MultiIndex):
-                subset_chip_ids = df_to_plot.index.get_level_values('chip_id')
-            else:
-                subset_chip_ids = df_to_plot.index
-                
-            # Identifies flagged anomalies within the current subset
-            anomaly_mask = subset_chip_ids.isin(both_anomalies)
-            
-            # Highlights the identified anomalies on the scatter plot
-            if anomaly_mask.any():
-                plt.scatter(df_to_plot.loc[anomaly_mask, 'PCA1'], df_to_plot.loc[anomaly_mask, 'PCA2'], edgecolor='black', facecolor='none', s=200, label='Flagged Anomaly', linewidth=2)
-                            
-            plt.title(f'Cross-Stage PCA: {split_name} ({label})')
-            plt.xlabel('Principal Component 1 (General Signal Variance)')
-            plt.ylabel('Principal Component 2 (Stage-to-Stage Dynamic Variance)')
-            plt.legend()
-            plt.grid(True, alpha=0.3)
-            plt.show()
-            
-            print(f'\n Cluster Profiling [{split_name} - {label}]')
-            
-            # Calculates cluster means and overall statistics to build z-score profiles
-            cluster_means = df_to_plot[features].groupby(df_to_plot['Cluster']).mean()
-            overall_mean = df_to_plot[features].mean()
-            overall_std = df_to_plot[features].std().replace(0, 1e-9)
-            
-            cluster_zscores = (cluster_means - overall_mean) / overall_std
-            
-            # Loops through each unique cluster ID
-            for cluster_id in sorted(df_to_plot['Cluster'].unique()):
-
-                print(f"\nCluster {cluster_id} Profile (n={sum(df_to_plot['Cluster'] == cluster_id)} observations):")
-                
-                # Sorts and extracts the highest and lowest z-score features
-                top_pos = cluster_zscores.loc[cluster_id].sort_values(ascending=False).head(3)
-                top_neg = cluster_zscores.loc[cluster_id].sort_values(ascending=True).head(3)
-                
-                print('  Defining High Features (Above Average):')
-                pos_found = False
-
-                # Loops through each feature and z-score in the top positive items
-                for feat, z in top_pos.items():
-
-                    if z > 0.5:
-
-                        print(f'    - {feat}: +{z:.2f} standard deviations')
-                        pos_found = True
+        # Identifies flagged anomalies within the current subset
+        anomaly_mask = merged.index.isin(both_anomalies)
+        
+        # Highlights the identified anomalies on the scatter plot
+        if anomaly_mask.any():
+            plt.scatter(merged.loc[anomaly_mask, 'PCA1'], merged.loc[anomaly_mask, 'PCA2'], edgecolor='black', facecolor='none', s=200, label='Flagged Anomaly', linewidth=2)
                         
-                # Checks if no significant positive features were found
-                if not pos_found: 
-                    print('    - None significantly above average')
-                    
-                print('  Defining Low Features (Below Average):')
-                neg_found = False
+        plt.title(f'Cross-Stage PCA: {split_name} ({channel_name})')
+        plt.xlabel('Principal Component 1 (General Signal Variance)')
+        plt.ylabel('Principal Component 2 (Stage-to-Stage Dynamic Variance)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.show()
+        
+        print(f'\n Cluster Profiling [{split_name} - {channel_name}]')
+        
+        # Calculates cluster means and overall statistics to build z-score profiles
+        cluster_means = merged[features].groupby(merged['Cluster']).mean()
+        overall_mean = merged[features].mean()
+        overall_std = merged[features].std().replace(0, 1e-9)
+        
+        cluster_zscores = (cluster_means - overall_mean) / overall_std
+        
+        # Loops through each unique cluster ID
+        for cluster_id in sorted(merged['Cluster'].unique()):
 
-                # Loops through each feature and z-score in the top negative items
-                for feat, z in top_neg.items():
-
-                    if z < -0.5:
-
-                        print(f'    - {feat}: {z:.2f} standard deviations')
-                        neg_found = True
-
-                # Checks if no significant negative features were found
-                if not neg_found: 
-                    print('    - None significantly below average')
+            print(f"\nCluster {cluster_id} Profile (n={sum(merged['Cluster'] == cluster_id)} observations):")
             
-            # Proceeds with standard curve mapping if metrics are provided
-            if sc_metrics_df is not None:
+            # Sorts and extracts the highest and lowest z-score features
+            top_pos = cluster_zscores.loc[cluster_id].sort_values(ascending=False).head(3)
+            top_neg = cluster_zscores.loc[cluster_id].sort_values(ascending=True).head(3)
+            
+            print('  Defining High Features (Above Average):')
+            pos_found = False
 
-                print(f'\n--- Cluster Functional Yield (R² Comparison) [{split_name} - {label}] ---')
+            # Loops through each feature and z-score in the top positive items
+            for feat, z in top_pos.items():
+
+                if z > 0.5:
+
+                    print(f'    - {feat}: +{z:.2f} standard deviations')
+                    pos_found = True
+                    
+            # Checks if no significant positive features were found
+            if not pos_found: 
+                print('    - None significantly above average')
                 
-                cluster_mapping = df_to_plot[['Cluster']].reset_index()
+            print('  Defining Low Features (Below Average):')
+            neg_found = False
 
-                # Renames the index column to 'chip_id' if present
-                if 'index' in cluster_mapping.columns:
-                    cluster_mapping = cluster_mapping.rename(columns={'index': 'chip_id'})
-                    
-                # Merges the standard curve metrics with the cluster mapping
-                sc_cluster_df = pd.merge(sc_metrics_df.reset_index(), cluster_mapping, on='chip_id', how='inner')
+            # Loops through each feature and z-score in the top negative items
+            for feat, z in top_neg.items():
+
+                if z < -0.5:
+
+                    print(f'    - {feat}: {z:.2f} standard deviations')
+                    neg_found = True
+
+            # Checks if no significant negative features were found
+            if not neg_found: 
+                print('    - None significantly below average')
+        
+        # Proceeds with standard curve mapping if metrics are provided
+        if sc_metrics_df is not None:
+
+            print(f'\n--- Cluster Functional Yield (R² Comparison) [{split_name} - {channel_name}] ---')
+            
+            cluster_mapping = merged[['Cluster']].reset_index()
+
+            # Renames the index column to 'chip_id' if present
+            if 'index' in cluster_mapping.columns:
+                cluster_mapping = cluster_mapping.rename(columns={'index': 'chip_id'})
                 
-                # Checks whether the merged dataframe contains data
-                if sc_cluster_df.empty:
-                    print('No Standard Curve data available to map to clusters.')
-                else:
-
-                    # Aggregates and displays standard curve R-squared performance per cluster
-                    cluster_stats = sc_cluster_df.groupby('Cluster')['r2'].agg(['count', 'mean', 'median', 'std']).fillna(0)
-                    print('Standard Curve R² Performance by Cluster:')
-                    display(cluster_stats)
-                    
-                    # Plots standard-curve R-squared scores by cluster to compare functional yield
-                    plt.figure(figsize=(10, 6))
-                    sns.boxplot(data=sc_cluster_df, x='Cluster', y='r2', showmeans=True,  meanprops={'marker':'o', 'markerfacecolor':'white', 'markeredgecolor':'black'})
-                    sns.stripplot(data=sc_cluster_df, x='Cluster', y='r2', color='black', alpha=0.5, jitter=True)
-                    plt.axhline(0.95, color='red', linestyle='--', label='Pass Threshold (0.95)')
-                    
-                    plt.title(f'Standard Curve R² Distribution by Manufacturing Cluster\n{split_name} ({label})')
-                    plt.xlabel('Manufacturing Cluster')
-                    plt.ylabel('Standard Curve R² Score')
-                    plt.legend()
-                    plt.grid(True, alpha=0.3)
-                    plt.tight_layout()
-                    plt.show()
-                    
-                # Creates lists to store the selected identifiers and anomaly results
-                subset_unique_chips = set(subset_chip_ids)
-                anomaly_ids = list(both_anomalies.intersection(subset_unique_chips))
-                
-                # Checks if there are any anomalous chips to validate
-                if not anomaly_ids:
-                    print(f'[{split_name} - {label}] No anomalous chips from the cross-stage analysis to validate against SC.')
-                else:
-
-                    print(f'\n[{split_name} - {label}] Validating functional performance for anomalous chip(s): {anomaly_ids}\n')
-                    
-                    # Extracts standard curve data for the anomalous chips
-                    anomaly_sc_data = sc_metrics_df[sc_metrics_df.index.isin(anomaly_ids)]
-                    
-                    # Checks whether the anomaly data contains records
-                    if anomaly_sc_data.empty:
-                        print('No Standard Curve data found for the flagged anomalous chip(s).')
-                    else:
-
-                        print(f"{'Chip ID':<15} | {'Curve UUID':<40} | {'R² Score':<10} | {'Status'}")
-                        print('-' * 80)
-
-                        # Loops through each row in the anomaly data
-                        for chip_id, row in anomaly_sc_data.iterrows():
-
-                            r2 = row['r2']
-                            curve_id = row['standard_curve_uuid']
-                            status = 'PASSED' if r2 >= 0.95 else 'FAILED'
-                            print(f'{chip_id:<15} | {curve_id:<40} | {r2:<10.4f} | {status}')
-                
-                # Isolates normal chips for baseline comparison
-                normal_sc_data = sc_metrics_df[~sc_metrics_df.index.isin(anomaly_ids)]
-
-                # Checks whether the normal data contains records
-                if not normal_sc_data.empty:
-                    print(f"\n>>> Average R² for NORMAL chips: {normal_sc_data['r2'].mean():.4f}")
+            # Merges the standard curve metrics with the cluster mapping
+            sc_cluster_df = pd.merge(sc_metrics_df.reset_index(), cluster_mapping, on='chip_id', how='inner')
+            
+            # Checks whether the merged dataframe contains data
+            if sc_cluster_df.empty:
+                print('No Standard Curve data available to map to clusters.')
             else:
 
-                # Creates lists to store the selected identifiers and results
-                subset_unique_chips = set(subset_chip_ids)
-                anomaly_ids = list(both_anomalies.intersection(subset_unique_chips))
-                print(f'\n--- Anomaly Identifications [{split_name} - {label}] ---')
+                # Aggregates and displays standard curve R-squared performance per cluster
+                cluster_stats = sc_cluster_df.groupby('Cluster')['r2'].agg(['count', 'mean', 'median', 'std']).fillna(0)
+                print('Standard Curve R² Performance by Cluster:')
+                display(cluster_stats)
+                
+                # Plots standard-curve R-squared scores by cluster to compare functional yield
+                plt.figure(figsize=(10, 6))
+                sns.boxplot(data=sc_cluster_df, x='Cluster', y='r2', showmeans=True,  meanprops={'marker':'o', 'markerfacecolor':'white', 'markeredgecolor':'black'})
+                sns.stripplot(data=sc_cluster_df, x='Cluster', y='r2', color='black', alpha=0.5, jitter=True)
+                plt.axhline(0.95, color='red', linestyle='--', label='Pass Threshold (0.95)')
+                
+                plt.title(f'Standard Curve R² Distribution by Manufacturing Cluster\n{split_name} ({channel_name})')
+                plt.xlabel('Manufacturing Cluster')
+                plt.ylabel('Standard Curve R² Score')
+                plt.legend()
+                plt.grid(True, alpha=0.3)
+                plt.tight_layout()
+                plt.show()
+                
+            # Creates lists to store the selected identifiers and anomaly results
+            anomaly_ids = list(both_anomalies.intersection(set(merged.index)))
+            
+            # Checks if there are any anomalous chips to validate
+            if not anomaly_ids:
+                print(f'[{split_name} - {channel_name}] No anomalous chips from the cross-stage analysis to validate against SC.')
+            else:
 
-                # Prints the flagged anomalous chips or a pass message
-                if anomaly_ids:
-                    print(f'Flagged Anomalous Chips in cluster: {anomaly_ids}')
+                print(f'\n[{split_name} - {channel_name}] Validating functional performance for anomalous chip(s): {anomaly_ids}\n')
+                
+                # Extracts standard curve data for the anomalous chips
+                anomaly_sc_data = sc_metrics_df[sc_metrics_df.index.isin(anomaly_ids)]
+                
+                # Checks whether the anomaly data contains records
+                if anomaly_sc_data.empty:
+                    print('No Standard Curve data found for the flagged anomalous chip(s).')
                 else:
-                    print('No anomalous chips detected in this cross-stage split.')
 
-    # Triggers the subset analysis for Channel 1 if it exists
-    if isinstance(merged.index, pd.MultiIndex) and 'Ch1' in merged.index.get_level_values('Channel'):
-        analyse_subset(merged.xs('Ch1', level='Channel', drop_level=False), 'Channel 1')
-        
-    # Triggers the subset analysis for Channel 2 if it exists
-    if isinstance(merged.index, pd.MultiIndex) and 'Ch2' in merged.index.get_level_values('Channel'):
-        analyse_subset(merged.xs('Ch2', level='Channel', drop_level=False), 'Channel 2')
-        
-    # Triggers the pooled overall subset analysis
-    analyse_subset(merged, 'Overall (Pooled)')
+                    print(f"{'Chip ID':<15} | {'Curve UUID':<40} | {'R² Score':<10} | {'Status'}")
+                    print('-' * 80)
+
+                    # Loops through each row in the anomaly data
+                    for chip_id, row in anomaly_sc_data.iterrows():
+
+                        r2 = row['r2']
+                        curve_id = row['standard_curve_uuid']
+                        status = 'PASSED' if r2 >= 0.95 else 'FAILED'
+                        print(f'{chip_id:<15} | {curve_id:<40} | {r2:<10.4f} | {status}')
+            
+            # Isolates normal chips for baseline comparison
+            normal_sc_data = sc_metrics_df[~sc_metrics_df.index.isin(anomaly_ids)]
+
+            # Checks whether the normal data contains records
+            if not normal_sc_data.empty:
+                print(f"\n>>> Average R² for NORMAL chips: {normal_sc_data['r2'].mean():.4f}")
+        else:
+
+            # Creates lists to store the selected identifiers and results
+            anomaly_ids = list(both_anomalies.intersection(set(merged.index)))
+
+            print(f'\n--- Anomaly Identifications [{split_name} - {channel_name}] ---')
+
+            # Prints the flagged anomalous chips or a pass message
+            if anomaly_ids:
+                print(f'Flagged Anomalous Chips in cluster: {anomaly_ids}')
+            else:
+                print('No anomalous chips detected in this cross-stage split.')
 
 def print_correlation_insights(corr_matrix, split_name, channel_name, top_n=3):
     '''Extracts and prints top positive, negative, and weakest correlations.
@@ -780,7 +798,6 @@ def print_correlation_insights(corr_matrix, split_name, channel_name, top_n=3):
     if corr_pairs.empty:
         print('Not enough variance to calculate correlation insights.\n')
         
-        # Returns control to the calling code
         return
 
     print('Top Positive Correlations:')
@@ -792,6 +809,7 @@ def print_correlation_insights(corr_matrix, split_name, channel_name, top_n=3):
     if top_pos.empty: 
         print('  None')
     else:
+
         # Loops through each feature pair and value
         for (feat1, feat2), val in top_pos.items(): 
             print(f'  - {feat1} & {feat2} (r = {val:.3f})')
@@ -805,6 +823,7 @@ def print_correlation_insights(corr_matrix, split_name, channel_name, top_n=3):
     if top_neg.empty: 
         print('  None')
     else:
+
         # Loops through each feature pair and value
         for (feat1, feat2), val in top_neg.items(): 
             print(f'  - {feat1} & {feat2} (r = {val:.3f})')
@@ -817,44 +836,29 @@ def print_correlation_insights(corr_matrix, split_name, channel_name, top_n=3):
     # Loops through each feature pair and value
     for (feat1, feat2), val in weakest.items():
         print(f'  - {feat1} & {feat2} (r = {val:.3f})')
+
     print('\n')
 
-def cross_stage_correlations(pel_df, immob_df, split_name, sc_metrics_df=None, title='Cross-Stage Correlations'):
+def cross_stage_correlations(pel_df, immob_df, split_name, channel_name, sc_metrics_df=None, title='Cross-Stage Correlations'):
     '''Compares PEL and immobilisation features using cross-stage correlations.
 
     Args:
         pel_df (pd.DataFrame): Wide PEL feature table.
         immob_df (pd.DataFrame): Wide immobilisation feature table.
         split_name (str): Label identifying the immobilisation split.
+        channel_name (str): The name of the current channel. 
         sc_metrics_df (pd.DataFrame | None, optional): Optional standard-curve metrics. Defaults to None.
         title (str, optional): Heading used for generated output. Defaults to 'Cross-Stage Correlations'.
     '''
 
-    # Creates a copy of the PEL dataframe to preserve the original data
+    # Creates copies to preserve original data
     pel_copy = pel_df.copy()
-    
-    # Creates a copy of the immobilisation dataframe to preserve the original data
     immob_copy = immob_df.copy()
 
     # Casts the columns to strings to ensure consistent merging
     pel_copy.columns = pel_copy.columns.astype(str)
     immob_copy.columns = immob_copy.columns.astype(str)
-
-    # Defines a mapping to normalise channel names across datasets
-    channel_mapping = {
-        'quad_ch1': 'Ch1', 'channel1': 'Ch1',
-        'quad_ch2': 'Ch2', 'channel2': 'Ch2',
-        'quad_ch1_change': 'Ch1', 'channel1_change': 'Ch1',
-        'quad_ch2_change': 'Ch2', 'channel2_change': 'Ch2'
-    }
     
-    # Renames MultiIndex levels if they contain a Channel index
-    if isinstance(pel_copy.index, pd.MultiIndex) and 'Channel' in pel_copy.index.names:
-        pel_copy = pel_copy.rename(index=channel_mapping, level='Channel')
-        
-    if isinstance(immob_copy.index, pd.MultiIndex) and 'Channel' in immob_copy.index.names:
-        immob_copy = immob_copy.rename(index=channel_mapping, level='Channel')
-
     # Merges the PEL and immobilisation datasets
     merged = pel_copy.merge(immob_copy, left_index=True, right_index=True, how='inner', suffixes=('_PEL', '_Immob'))
 
@@ -875,59 +879,30 @@ def cross_stage_correlations(pel_df, immob_df, split_name, sc_metrics_df=None, t
         # Selects the earliest standard curve entry per chip to avoid duplicates
         sc_first = sc_copy.sort_values('datetime').groupby(sc_copy.index, sort=False).first().drop(columns='datetime')
         
-        # Left joins the standard curve metrics onto the merged dataframe
-        if isinstance(merged.index, pd.MultiIndex):
-            merged = merged.merge(sc_first, left_on='chip_id', right_index=True, how='left')
-        else:
-            merged = merged.merge(sc_first, left_index=True, right_index=True, how='left')
+        merged = merged.merge(sc_first, left_index=True, right_index=True, how="left")
 
-    # Checks whether the merged dataframe contains data
-    if merged.empty:
+    # Displays the results in a collapsible output section
+    with collapsible_output(f'{title} - {channel_name}'):
 
-        print(f'[{split_name}] Not enough overlapping data points for cross-analysis.')
-
-        # Returns control to the calling code
-        return
-    
-    def analyse_subset(subset_df, label):
-        '''Calculates and displays correlation results for one channel subset.
-
-        Args:
-            subset_df (pd.DataFrame): Merged features for the selected subset.
-            label (str): Human-readable subset label.
-        '''
-
-        # Checks whether the subset dataframe contains data
-        if subset_df.empty:
             
-            # Returns control to the calling code
+        # Checks whether the merged dataframe contains data
+        if merged.empty:
+
+            print(f"[{split_name} - {channel_name}] Not enough overlapping chips for cross-analysis.")
+
             return
-            
-        # Displays the results in a collapsible output section
-        with collapsible_output(f'{title} - {label}'):
 
-            print(f'[{split_name} - {label}] Overlapping data points analysed: {len(subset_df)}\n')
+        print(f'[{split_name} - {channel_name}] Overlapping data points analysed: {len(merged)}\n')
 
-            corr_matrix = subset_df.corr()
-            print_correlation_insights(corr_matrix, split_name, label, top_n=3)
+        corr_matrix = merged.corr()
+        print_correlation_insights(corr_matrix, split_name, channel_name, top_n=3)
 
-            # Plots the cross-stage correlation matrix to show relationships between all selected features
-            plt.figure(figsize=(20, 20))
-            sns.heatmap(corr_matrix, cmap='plasma', center=0, annot=False)
-            plt.title(f'{split_name} ({label}) - Overall Correlation')
-            plt.tight_layout()
-            plt.show()
-
-    # Triggers the subset analysis for Channel 1 if it exists
-    if isinstance(merged.index, pd.MultiIndex) and 'Ch1' in merged.index.get_level_values('Channel'):
-        analyse_subset(merged.xs('Ch1', level='Channel', drop_level=False), 'Channel 1')
-        
-    # Triggers the subset analysis for Channel 2 if it exists
-    if isinstance(merged.index, pd.MultiIndex) and 'Ch2' in merged.index.get_level_values('Channel'):
-        analyse_subset(merged.xs('Ch2', level='Channel', drop_level=False), 'Channel 2')
-        
-    # Triggers the pooled overall subset analysis
-    analyse_subset(merged, 'Overall (Pooled)')
+        # Plots the cross-stage correlation matrix to show relationships between all selected features
+        plt.figure(figsize=(20, 20))
+        sns.heatmap(corr_matrix, cmap='plasma', center=0, annot=False)
+        plt.title(f'{split_name} ({channel_name}) - Overall Correlation')
+        plt.tight_layout()
+        plt.show()
 
 def create_interactive_dashboard(data_catalog):
     '''Creates an interactive explorer for comparing data sources and features.
@@ -936,50 +911,213 @@ def create_interactive_dashboard(data_catalog):
         data_catalog (dict): Nested mapping of analysis modes to named dataframes.
     '''
 
+    # State dictionary tracks the last known values to prevent overwriting active filters
+    state = {
+        'updating': False,
+        'last_mode': None,
+        'last_ch': None,
+        'last_x_src': None,
+        'last_x_col': None,
+        'last_y_src': None,
+        'last_y_col': None
+    }
+
+    all_sources = list(data_catalog['Absolute'].keys())
+
     # Initialises widget controls for the dashboard
     mode_toggle = widgets.ToggleButtons(options=['Absolute', 'Stage Delta', 'Intra-stage Kinetics'], style={'description_width': 'initial'})
-    channel_dropdown = widgets.Dropdown(options=['Channel 1', 'Channel 2', 'Both'], value='Channel 1', description='Channel:')
-    sources = list(data_catalog['Absolute'].keys())
+    channel_dropdown = widgets.Dropdown(options=['Channel 1', 'Channel 2'], value='Channel 1', description='Channel:')
 
-    x_source_drop = widgets.Dropdown(options=sources, value=sources[0], description='X Source:')
-    y_source_drop = widgets.Dropdown(options=sources, value=sources[0], description='Y Source:')
+    x_source_drop = widgets.Dropdown(options=all_sources, value=all_sources[0], description='X Source:')
+    y_source_drop = widgets.Dropdown(options=all_sources, value=all_sources[0], description='Y Source:')
 
     x_col_drop = widgets.Dropdown(description='X Metric:')
     y_col_drop = widgets.Dropdown(description='Y Metric:')
-    
+
+    # Range filters for Greater than / Less than selection based on absolute limits
+    x_min_input = widgets.BoundedFloatText(description='Min X:')
+    x_max_input = widgets.BoundedFloatText(description='Max X:')
+    y_min_input = widgets.BoundedFloatText(description='Min Y:')
+    y_max_input = widgets.BoundedFloatText(description='Max Y:')
+
+    # Reset Buttons
+    x_reset_btn = widgets.Button(description='Reset X', button_style='info', tooltip='Reset X filters to original bounds')
+    y_reset_btn = widgets.Button(description='Reset Y', button_style='info', tooltip='Reset Y filters to original bounds')
+
+    def reset_x_filters(b):
+
+        # Restores the values to the absolute min/max bounds established during the update step
+        x_min_input.value = x_min_input.min
+        x_max_input.value = x_max_input.max
+
+    def reset_y_filters(b):
+
+        # Restores the values to the absolute min/max bounds established during the update step
+        y_min_input.value = y_min_input.min
+        y_max_input.value = y_max_input.max
+
+    x_reset_btn.on_click(reset_x_filters)
+    y_reset_btn.on_click(reset_y_filters)
+
+    # Group filters into containers initially hidden (now including reset buttons)
+    x_filters = widgets.HBox([x_min_input, x_max_input, x_reset_btn], layout=widgets.Layout(display='none'))
+    y_filters = widgets.HBox([y_min_input, y_max_input, y_reset_btn], layout=widgets.Layout(display='none'))
+
     out = widgets.Output()
-    
+
+    def update_sources(*args):
+        '''Updates available data sources depending on the selected channel (removes Standard Curve for Ch2).'''
+
+        if state['updating']:
+            return
+
+        state['updating'] = True
+
+        ch = channel_dropdown.value
+
+        # Standard Curve missing from Channel 2
+        valid_sources = [s for s in all_sources if s != 'Standard Curve'] if ch == 'Channel 2' else all_sources
+
+        curr_x, curr_y = x_source_drop.value, y_source_drop.value
+
+        x_source_drop.options = valid_sources
+        y_source_drop.options = valid_sources
+
+        x_source_drop.value = curr_x if curr_x in valid_sources else valid_sources[0]
+        y_source_drop.value = curr_y if curr_y in valid_sources else valid_sources[0]
+
+        state['updating'] = False
+        update_dropdowns()
+
     def update_dropdowns(*args):
         '''Refreshes feature dropdown options after the selected sources change.'''
 
+        if state['updating']:
+            return
+
+        state['updating'] = True
+
         mode = mode_toggle.value
+        ch = channel_dropdown.value
         x_src, y_src = x_source_drop.value, y_source_drop.value
-        
-        x_cols = list(data_catalog[mode][x_src].columns)
-        y_cols = list(data_catalog[mode][y_src].columns)
-        
-        # Updates the X metric dropdown options
-        x_col_drop.options = x_cols
 
-        # Resets the X metric value if the current selection is invalid
-        if x_col_drop.value not in x_cols: 
+        if x_src and y_src:
 
-            x_col_drop.value = x_cols[0] if x_cols else None
-            
-        # Updates the Y metric dropdown options
-        y_col_drop.options = y_cols
-        
-        # Resets the Y metric value if the current selection is invalid
-        if y_col_drop.value not in y_cols: 
+            # Extracts columns directly from the nested dictionary structure
+            x_cols = list(data_catalog[mode][x_src][ch].columns)
+            y_cols = list(data_catalog[mode][y_src][ch].columns)
 
-            y_col_drop.value = y_cols[0] if y_cols else None
-            
-    # Binds observers to trigger dropdown updates on value changes
-    mode_toggle.observe(update_dropdowns, 'value')
-    x_source_drop.observe(update_dropdowns, 'value')
-    y_source_drop.observe(update_dropdowns, 'value')
-    update_dropdowns()
-    
+            # Extracts columns selected
+            curr_x_col = x_col_drop.value
+            curr_y_col = y_col_drop.value
+
+            # Updates the X metric dropdown options
+            x_col_drop.options = x_cols
+
+            # Updates the Y metric dropdown options
+            y_col_drop.options = y_cols
+
+            # Resets the X metric value if the current selection is invalid
+            x_col_drop.value = curr_x_col if curr_x_col in x_cols else (x_cols[0] if x_cols else None)
+
+            # Resets the Y metric value if the current selection is invalid
+            y_col_drop.value = curr_y_col if curr_y_col in y_cols else (y_cols[0] if y_cols else None)
+
+        state['updating'] = False
+        update_filter_bounds()
+
+    def update_filter_bounds(*args):
+        '''Dynamically sets the absolute min/max limits ONLY for the axes that were just modified.'''
+
+        if state['updating']:
+            return
+
+        state['updating'] = True
+
+        mode, ch = mode_toggle.value, channel_dropdown.value
+        x_src, y_src = x_source_drop.value, y_source_drop.value
+        x_col, y_col = x_col_drop.value, y_col_drop.value
+
+        # Determine exactly which axis datasets changed to avoid wiping custom filters on the other axis
+        needs_x_update = (mode != state.get('last_mode') or ch != state.get('last_ch') or x_src != state.get('last_x_src') or x_col != state.get('last_x_col'))
+        needs_y_update = (mode != state.get('last_mode') or ch != state.get('last_ch') or y_src != state.get('last_y_src') or y_col != state.get('last_y_col'))
+
+        if needs_x_update:
+            if x_src == 'Standard Curve':
+
+                x_filters.layout.display = 'flex'
+
+                if x_col:
+
+                    df_x = data_catalog[mode][x_src][ch]
+
+                    if not df_x.empty and x_col in df_x.columns:
+
+                        x_data = df_x[x_col].dropna()
+
+                        if not x_data.empty:
+
+                            x_min, x_max = float(x_data.min()), float(x_data.max())
+
+                            if x_min == x_max:
+                                x_max += 1e-9
+
+                            # Create a safe large finite number
+                            LARGE_NUM = 1e30 
+
+                            x_min_input.min, x_max_input.max = -LARGE_NUM, LARGE_NUM
+                            x_max_input.min, x_min_input.max = -LARGE_NUM, LARGE_NUM
+
+                            x_min_input.value, x_max_input.value = x_min, x_max
+                            x_min_input.min, x_min_input.max = x_min, x_max
+                            x_max_input.min, x_max_input.max = x_min, x_max
+            else:
+                x_filters.layout.display = 'none'
+
+            # Save the new X state
+            state['last_x_src'], state['last_x_col'] = x_src, x_col
+
+        if needs_y_update:
+            if y_src == 'Standard Curve':
+
+                y_filters.layout.display = 'flex'
+
+                if y_col:
+
+                    df_y = data_catalog[mode][y_src][ch]
+
+                    if not df_y.empty and y_col in df_y.columns:
+
+                        y_data = df_y[y_col].dropna()
+
+                        if not y_data.empty:
+
+                            y_min, y_max = float(y_data.min()), float(y_data.max())
+
+                            if y_min == y_max:
+                                y_max += 1e-9
+
+                            # Create a safe large finite number
+                            LARGE_NUM = 1e30
+
+                            y_min_input.min, y_max_input.max = LARGE_NUM, LARGE_NUM
+                            y_max_input.min, y_min_input.max = LARGE_NUM, LARGE_NUM
+
+                            y_min_input.value, y_max_input.value = y_min, y_max
+                            y_min_input.min, y_min_input.max = y_min, y_max
+                            y_max_input.min, y_max_input.max = y_min, y_max
+            else:
+                y_filters.layout.display = 'none'
+
+            # Save the new Y state
+            state['last_y_src'], state['last_y_col'] = y_src, y_col
+
+        # Save overarching state
+        state['last_mode'], state['last_ch'] = mode, ch
+
+        state['updating'] = False
+        plot_data()
+
     def get_joined_data(mode, x_src, y_src, x_col, y_col, channel_label):
         '''Joins selected dashboard fields and applies an optional channel filter.
 
@@ -995,55 +1133,11 @@ def create_interactive_dashboard(data_catalog):
             pd.DataFrame: Joined, complete observations for the selected fields.
         '''
 
-        # Creates a copy of the X dataframe to preserve the original data
-        df_x = data_catalog[mode][x_src].copy()
-        
-        # Creates a copy of the Y dataframe to preserve the original data
-        df_y = data_catalog[mode][y_src].copy()
-        
-        def slice_channel(df, ch_label):
-            '''Returns rows for a selected channel when the table uses a MultiIndex.
-            
-            Args:
-                df (pd.DataFrame): The dataframe to slice.
-                ch_label (str): The label of the channel to isolate.
-                
-            Returns:
-                pd.DataFrame: The sliced dataframe.
-            '''
+        # Retrieves the specific dataframes from the catalog using the channel label
 
-            target_ch = 'Ch1' if ch_label == 'Channel 1' else 'Ch2'
+        df_x = data_catalog[mode][x_src][channel_label].copy()
+        df_y = data_catalog[mode][y_src][channel_label].copy()
 
-            # Performs the slice if the index is a MultiIndex containing 'Channel'
-            if isinstance(df.index, pd.MultiIndex) and 'Channel' in df.index.names:
-                
-                # Defines a standard mapping for channel names
-                ch_map = {
-                    'quad_ch1': 'Ch1', 
-                    'channel1': 'Ch1', 
-                    'quad_ch2': 'Ch2', 
-                    'channel2': 'Ch2',
-                    'quad_ch1_change': 'Ch1', 
-                    'channel1_change': 'Ch1',
-                    'quad_ch2_change': 'Ch2', 
-                    'channel2_change': 'Ch2'
-                }
-
-                # Renames the Channel level to ensure consistent lookups
-                df = df.rename(index=ch_map, level='Channel')
-                
-                # Returns the isolated target channel if it exists
-                if target_ch in df.index.get_level_values('Channel'):
-                    return df.xs(target_ch, level='Channel')
-                else:
-                    return pd.DataFrame()
-                
-            return df
-
-        # Slices both dataframes using the requested channel label
-        df_x = slice_channel(df_x, channel_label)
-        df_y = slice_channel(df_y, channel_label)
-        
         # Checks whether either dataframe is empty
         if df_x.empty or df_y.empty:
             return pd.DataFrame()
@@ -1052,10 +1146,10 @@ def create_interactive_dashboard(data_catalog):
         df_x.columns = df_x.columns.astype(str)
         df_y.columns = df_y.columns.astype(str)
         x_col_str, y_col_str = str(x_col), str(y_col)
-        
+
         # Inner joins the dataframes on their index
         df_merged = pd.merge(df_x[[x_col_str]], df_y[[y_col_str]], left_index=True, right_index=True, how='inner', suffixes=('_x', '_y'))
-        
+
         # Handles column renaming if X and Y columns share the same name
         actual_x_col = x_col_str + '_x' if x_col_str == y_col_str else x_col_str
         actual_y_col = y_col_str + '_y' if x_col_str == y_col_str else y_col_str
@@ -1064,9 +1158,12 @@ def create_interactive_dashboard(data_catalog):
         return df_merged.replace([np.inf, -np.inf], np.nan).dropna()
 
     def plot_data(*args):
-        '''Creates the dashboard scatter plot using the current widget selections.'''
+        '''Creates the dashboard scatter plot and conditionally filters Standard Curve data.'''
 
-        # Opens the resource safely for processing
+        # Prevents redundant plotting cycles during chained updates
+        if state['updating']:
+            return
+
         with out:
 
             # Clears the previous output before rendering the new plot
@@ -1075,23 +1172,21 @@ def create_interactive_dashboard(data_catalog):
             mode, channel = mode_toggle.value, channel_dropdown.value
             x_src, y_src = x_source_drop.value, y_source_drop.value
             x_col, y_col = x_col_drop.value, y_col_drop.value
-            
+
             # Displays an error if the selected columns are invalid
             if not x_col or not y_col:
-
                 print('Please select valid metrics to plot.')
 
-                # Returns control to the calling code
                 return
-                
+
             # Creates a new Plotly figure for the visualisation
             fig = go.Figure()
-            
+
             # Sets the active channels based on the dropdown selection
             channels_to_plot = ['Channel 1', 'Channel 2'] if channel == 'Both' else [channel]
-            colors = {'Channel 1': '#1f77b4', 'Channel 2': '#ff1e0e'} 
+            colors = {'Channel 1': '#1f77b4', 'Channel 2': '#ff1e0e'}
             plotted_any = False
-            
+
             # Loops through each channel to plot its data
             for ch in channels_to_plot:
 
@@ -1100,57 +1195,74 @@ def create_interactive_dashboard(data_catalog):
                     plot_df = get_joined_data(mode, x_src, y_src, x_col, y_col, ch)
                 except Exception as e:
                     continue
-                    
+
+                # Create a baseline mask allowing all data through
+                mask = pd.Series(True, index=plot_df.index)
+
+                # Apply X filters ONLY if Standard Curve is selected for X
+                if x_src == 'Standard Curve':
+                    mask &= (plot_df['x_val'] >= x_min_input.value) & (plot_df['x_val'] <= x_max_input.value)
+
+                # Apply Y filters ONLY if Standard Curve is selected for Y
+                if y_src == 'Standard Curve':
+                    mask &= (plot_df['y_val'] >= y_min_input.value) & (plot_df['y_val'] <= y_max_input.value)
+
+                plot_df = plot_df[mask]
+
                 # Skips the channel if there are insufficient points for plotting
-                if len(plot_df) < 2: 
+                if len(plot_df) < 2:
                     continue
 
                 plotted_any = True
                 x_data, y_data = plot_df['x_val'], plot_df['y_val']
-                
+
                 # Adds a scatter trace for the data points
                 fig.add_trace(go.Scatter(x=x_data, y=y_data, mode='markers', name=f'{ch}', marker=dict(size=8, opacity=0.7, color=colors[ch], line=dict(width=1, color='DarkSlateGrey')), text=plot_df.index, hovertemplate='Chip ID: %{text}<br>X: %{x:.4f}<br>Y: %{y:.4f}<extra></extra>'))
-                
+
                 # Calculates and plots a linear regression fit if variance exists
                 if x_data.nunique() > 1:
 
                     slope, intercept, r_value, p_value, std_err = linregress(x_data, y_data)
                     x_fit = np.linspace(x_data.min(), x_data.max(), 100)
                     y_fit = slope * x_fit + intercept
-                    
-                    fig.add_trace(go.Scatter(x=x_fit, y=y_fit, mode='lines', name=f'{ch} Fit (r={r_value:.3f}, R^2={r_value**2:.3f})', line=dict(color=colors[ch], dash='dash', width=2), hoverinfo='skip'))            
-            
+
+                    fig.add_trace(go.Scatter(x=x_fit, y=y_fit, mode='lines', name=f'{ch} Fit (r={r_value:.3f}, R^2={r_value**2:.3f})', line=dict(color=colors[ch], dash='dash', width=2), hoverinfo='skip'))
+
             # Reports an error if no valid data was found for any channel
             if not plotted_any:
+                print('Not enough matching chip records to plot these selections within the specified filter bounds.')
 
-                print('Not enough matching chip records to plot these selections.')
-
-                # Returns control to the calling code
                 return
-                
+
             # Formats and displays the final interactive dashboard
             title = f'{y_src} [{y_col}] vs {x_src} [{x_col}]'
             fig.update_layout(title=title, xaxis_title=f'{x_src} : {x_col}', yaxis_title=f'{y_src} : {y_col}', template='plotly_white', height=600, margin=dict(l=40, r=40, t=60, b=40), hovermode='closest')
             fig.show()
 
-    # Binds observers to trigger plotting on widget changes
-    mode_toggle.observe(plot_data, 'value')
-    channel_dropdown.observe(plot_data, 'value')
-    x_source_drop.observe(plot_data, 'value')
-    y_source_drop.observe(plot_data, 'value')
-    x_col_drop.observe(plot_data, 'value')
-    y_col_drop.observe(plot_data, 'value')
-    
-    # Organises the controls vertically
-    controls = widgets.VBox([mode_toggle, channel_dropdown, widgets.HBox([x_source_drop, x_col_drop]), widgets.HBox([y_source_drop, y_col_drop])])
-    
+    # Binds appropriate observers to orchestrate the rendering cascade
+    channel_dropdown.observe(update_sources, 'value')
+    mode_toggle.observe(update_dropdowns, 'value')
+    x_source_drop.observe(update_dropdowns, 'value')
+    y_source_drop.observe(update_dropdowns, 'value')
+    x_col_drop.observe(update_filter_bounds, 'value')
+    y_col_drop.observe(update_filter_bounds, 'value')
+
+    # Bind the filters directly to the plot_data step, bypassing data re-extraction
+    x_min_input.observe(plot_data, 'value')
+    x_max_input.observe(plot_data, 'value')
+    y_min_input.observe(plot_data, 'value')
+    y_max_input.observe(plot_data, 'value')
+
+    # Structure UI components
+    controls = widgets.VBox([mode_toggle, channel_dropdown, widgets.HBox([x_source_drop, x_col_drop]), x_filters, widgets.HBox([y_source_drop, y_col_drop]), y_filters])
+
     # Displays the dashboard elements
     display(widgets.HTML(f"<h3 style='margin-bottom:0px; color:#0000FF;'>Master Chip Comparison Dashboard</h3>"))
     display(controls, out)
 
-    # Invokes the initial plot
-    plot_data()
-
+    # Initialises the widget
+    update_sources()
+       
 def get_top_drivers(df, chip_id, top_n=3):
     '''Identifies the features that most strongly distinguish a chip from its peers.
 
@@ -1163,51 +1275,51 @@ def get_top_drivers(df, chip_id, top_n=3):
         list[str]: Ranked absolute z-scores formatted as strings for the selected chip.
     '''
 
+    # Skips evaluation if the chip ID is not found in the standard index
+    if chip_id not in df.index: 
+        return ["N/A (Chip not in dataset)"]
+    
     mean = df.mean()
     std = df.std().replace(0, 1e-9)
+    z_scores = ((df.loc[chip_id] - mean) / std).abs().dropna()
+
+    # Checks whether the z-scores series contains data
+    if z_scores.empty: 
+        return ["N/A"]
     
-    # Evaluates the drivers based on the type of index structure
-    if isinstance(df.index, pd.MultiIndex):
+    top_stages = z_scores.sort_values(ascending=False).head(top_n)
 
-        if chip_id not in df.index.get_level_values('chip_id'): 
-            return ['N/A (Chip not in dataset)']
-        
-        chip_rows = df.xs(chip_id, level='chip_id')
-        drivers = []
+    # Returns the formatted top drivers
+    return [f'{stage} (Z: {z:.1f})' for stage, z in top_stages.items()]
 
-        # Loops through each row in the dataframe for the targeted chip
-        for ch, row in chip_rows.iterrows():
+def prepare_section(df, stage_col, val_col):
 
-            z_scores = ((row - mean) / std).abs().dropna()
+    '''Pivots the chip data and identifies outlier chips through anomaly detection.
 
-            # Checks whether the z-scores series contains data
-            if not z_scores.empty:
+    Args:
+        df (pd.DataFrame): The input long-format dataframe containing chip metrics.
+        stage_col (str): The name of the column representing the processing stage or feature.
+        val_col (str): The name of the column containing the values to pivot.
 
-                top_stages = z_scores.sort_values(ascending=False).head(top_n)
-                
-                # Formats the top driving stages for the current channel
-                top_str = ' | '.join([f'{stage} (Z: {z:.1f})' for stage, z in top_stages.items()])
-                drivers.append(f'[{ch}] {top_str}')
+    Returns:
+        tuple[pd.DataFrame, list]: A tuple containing the pivoted wide-format dataframe and a list of identified outlier chip identifiers.
+    '''
 
-        return drivers
-    else:
+    # Filters out non-informative startup stages
+    filtered_df = df[~df[stage_col].isin(['Start', 'Initial'])]
 
-        # Skips evaluation if the chip ID is not found in the standard index
-        if chip_id not in df.index: 
-            return ['N/A (Chip not in dataset)']
-        
-        z_scores = ((df.loc[chip_id] - mean) / std).abs().dropna()
+    # Pivots the data into a wide format using the specified stage and value columns
+    pivoted = pivot_chip_data(filtered_df, stage_col, val_col)
 
-        # Checks whether the z-scores series contains data
-        if z_scores.empty: 
-            return ['N/A']
-        
-        top_stages = z_scores.sort_values(ascending=False).head(top_n)
+    # Detects anomalies across all pivoted feature columns using automatic contamination scaling
+    anomalies = detect_anomalies(pivoted, pivoted.columns.tolist())
 
-        # Returns the formatted top drivers
-        return [f'{stage} (Z: {z:.1f})' for stage, z in top_stages.items()]
+    # Extracts the index identifiers for chips flagged as outliers
+    outliers = get_outlier_chips(anomalies)
 
-def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips, section_config, title='Overall At-Risk Chips Summary'):
+    return pivoted, outliers
+
+def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips, section_config, incomplete_chips=None, title='Overall At-Risk Chips Summary'):
     '''Clusters chips based on combined stage data, cross-references against standard curve metrics, and generates a structured summary report across 5 distinct sections.
 
     Args:
@@ -1216,8 +1328,15 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
         sc_raw_df (pd.DataFrame): Raw standard curve data.
         all_at_risk_chips (list): List of all chips identified as at-risk.
         section_config (dict): Configuration mapping for different summary sections.
+        incomplete_chips (set/list, optional): Chips identified as having incomplete datasets.
         title (str, optional): The title for the summary. Defaults to 'Overall At-Risk Chips Summary'.
     '''
+
+    # Initialises incomplete chips as an empty set if not provided
+    if incomplete_chips is None:
+        incomplete_chips = set()
+    else:
+        incomplete_chips = set(incomplete_chips)
 
     # Creates channel-order variables for the comparison results
     pel_unique = set()
@@ -1265,6 +1384,11 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
             print(f'Total Unique PEL Fails: {len(pel_unique)}')
             print(f'Total Unique Immobilisation Fails: {len(immob_unique)}')
             print(f'Total Unique Standard Curve Fails: {len(sc_fails)}')
+
+            print(f'Total Unique Incomplete Chips: {len(incomplete_chips)}')
+            
+            if incomplete_chips:
+                print(f"  - Incomplete Chip IDs: {', '.join(map(str, sorted(list(incomplete_chips))))}")
         else:
             print('No faults detected across any stage. Everything looks normal!')
 
@@ -1272,6 +1396,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
     with collapsible_output(f'{title} - PEL Breakdown'):
 
         print(f'Total Unique PEL Faulty Chips: {len(pel_unique)}')
+        print(pel_unique, '\n')
 
         # Expands the individual sections triggered within PEL
         if pel_unique:
@@ -1279,11 +1404,14 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
             # Loops through each section name and outlier list in the PEL breakdown
             for sec_name, out_list in pel_breakdown.items():
                 print(f"  - {sec_name}: {len(out_list)} chips ({', '.join(map(str, out_list))})")
+        else:
+            print("No anomalies detected in the PEL stage.")
 
     # Displays the results in a collapsible output section
     with collapsible_output(f'{title} - Immobilisation Breakdown'):
 
         print(f'Total Unique Immobilisation Faulty Chips: {len(immob_unique)}')
+        print(immob_unique, '\n')
 
         # Expands the individual sections triggered within Immobilisation
         if immob_unique:
@@ -1291,6 +1419,8 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
             # Loops through each section name and outlier list in the Immobilisation breakdown
             for sec_name, out_list in immob_breakdown.items():
                 print(f"  - {sec_name}: {len(out_list)} chips ({', '.join(map(str, out_list))})")
+        else:
+            print("No anomalies detected in the Immobilisation stage.")
 
     # Displays the results in a collapsible output section
     with collapsible_output(f'{title} - Standard Curve Breakdown'):
@@ -1299,6 +1429,8 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
 
         if sc_fails: 
             print(f"Chip IDs (R^2 < 0.95): {', '.join(map(str, sorted(list(sc_fails))))}")
+        else:
+            print("No Standard Curve anomalies detected (All R² >= 0.95).")
 
     # Displays the results in a collapsible output section
     with collapsible_output(f'{title} - Chip Profiles'):
@@ -1308,11 +1440,10 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
 
             print('No detailed profiles available.')
             
-            # Returns control to the calling code
             return
 
         features = master_df.columns.tolist()
-        X_master = StandardScaler().fit_transform(master_df[features])
+        X_master = RobustScaler().fit_transform(master_df[features])
         
         # Re-clusters the master dataset for contextual grouping
         kmeans = KMeans(n_clusters=2, random_state=8030, n_init=10)
@@ -1336,10 +1467,18 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
         for chip in combined_all_fails:
             
             # Identifies the assigned cluster for the current chip
-            if chip in master_df.index.get_level_values('chip_id'):
-
-                chip_clusters = master_df.xs(chip, level='chip_id')['Cluster'].to_dict()
-                cluster_profile = ' | '.join([f'{ch}: Cluster {cl}' for ch, cl in chip_clusters.items()])
+            if chip in master_df.index.get_level_values(master_df.index.name or 'chip_id'):
+                
+                # Check if it's a MultiIndex (e.g., chip_id + channel)
+                if isinstance(master_df.index, pd.MultiIndex):
+                    chip_clusters = master_df.xs(chip, level='chip_id')['Cluster'].to_dict()
+                    cluster_profile = ' | '.join([f'{ch}: Cluster {cl}' for ch, cl in chip_clusters.items()])
+                
+                # If it's a flat index (just chip_id)
+                else:
+                    cl = master_df.loc[chip, 'Cluster']
+                    cluster_profile = f'Cluster {cl}'
+                    
             else:
                 cluster_profile = 'N/A (Incomplete Stage Data)'
                 
@@ -1671,34 +1810,104 @@ def plot_kinetic_curves(data, title):
     plt.tight_layout()
     plt.show()
 
-def plot_kobs_vs_conc(data, title):
-    '''Plots observed association rates against concentration.
+def plot_rates_vs_conc(data, title_prefix):
+    '''Plots k_obs, k_a, k_d, and K_D against concentration as sequential plots.
+    Includes all data points, even physically impossible negative values, for diagnostic purposes.
 
     Args:
-        data (dict): Kinetic results containing concentration and kobs.
-        title (str): Plot title.
+        data (dict): Kinetic results containing fits and global rates.
+        title_prefix (str): Prefix for the plot titles.
     '''
 
     # Extracts concentrations and observed association rates for successful fits
-    concs = [f['conc'] for f in data['fits'] if f['assoc_fit'] is not None]
+    concs_kobs = [f['conc'] for f in data['fits'] if f['assoc_fit'] is not None]
     kobs_vals = [f['assoc_fit'][1] for f in data['fits'] if f['assoc_fit'] is not None]
 
-    # Initialises the Matplotlib figure and plots the scatter points
+    if concs_kobs:
+
+        # Initialises the figure and plots the k_obs scatter points
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.scatter(concs_kobs, kobs_vals, color='tab:blue')
+
+        # Generates and plots the linear fit line if sufficient data exists
+        if len(concs_kobs) >= 2 and 'ka' in data:
+            
+            x_fit = np.linspace(0, max(concs_kobs), 50)
+            y_fit = data['ka'] * x_fit + data['kd']
+            ax.plot(x_fit, y_fit, '--', color='black', label=f"ka={data['ka']:.2e}, kd={data['kd']:.2e}")
+            ax.legend()
+
+        # Formats and displays the k_obs plot
+        ax.set_xlabel('Concentration (ug/ml)')
+        ax.set_ylabel('k_obs (s$^{-1}$)')
+        ax.set_title(f'{title_prefix} - k_obs')
+        ax.grid(True, linestyle='--', alpha=0.5)
+        plt.show()
+
+    # Initialises empty lists to store individual parameters
+    concs_params = []
+    ka_vals = []
+    kd_vals = []
+    KD_vals = []
+
+    # Loops through each generated curve fit to calculate individual rates
+    for f in data['fits']:
+
+        # Extracts parameters if both association and dissociation fits are successful
+        if f['assoc_fit'] is not None and f['dissoc_fit'] is not None and f['conc'] > 0:
+
+            kobs = f['assoc_fit'][1]
+            kd = f['dissoc_fit'][1]
+            ka_indiv = (kobs - kd) / f['conc']
+            
+            # Calculates KD, avoiding division by zero
+            KD_indiv = kd / ka_indiv if ka_indiv != 0 else np.nan
+            
+            concs_params.append(f['conc'])
+            ka_vals.append(ka_indiv)
+            kd_vals.append(kd)
+            KD_vals.append(KD_indiv)
+
+    # Skips the remaining plots if no valid data points exist
+    if not concs_params:
+
+        print("No valid fits available for additional parameter plots.")
+        return
+
+    # Initialises the figure and plots the ka scatter points
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.scatter(concs, kobs_vals, color='tab:blue')
-
-    # Generates values for the linear fit line
-    x_fit = np.linspace(0, max(concs), 50)
-    y_fit = data['ka'] * x_fit + data['kd']
-
-    # Plots the linear fit line and adds the equation to the legend
-    ax.plot(x_fit, y_fit, '--', color='black', label=f"ka={data['ka']:.2e}, kd={data['kd']:.2e}")
-
-    # Formats and displays the plot
+    ax.scatter(concs_params, ka_vals, color='tab:green')
+    
+    # Formats and displays the ka plot (Linear scale allows negatives)
     ax.set_xlabel('Concentration (ug/ml)')
-    ax.set_ylabel('k_obs (s$^{-1}$)')
-    ax.set_title(title)
-    ax.legend()
+    ax.set_ylabel('k_a (ug/ml*s)$^{-1}$')
+    ax.set_title(f'{title_prefix} - Association Rate (k_a)')
+    ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    plt.show()
+
+    # Initialises the figure and plots the kd scatter points
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(concs_params, kd_vals, color='tab:red')
+    
+    # Formats and displays the kd plot
+    ax.set_xlabel('Concentration (ug/ml)')
+    ax.set_ylabel('k_d (s$^{-1}$)')
+    ax.set_title(f'{title_prefix} - Dissociation Rate (k_d)')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    plt.show()
+
+    # Initialises  figure and plots the KD scatter points
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(concs_params, KD_vals, color='tab:purple')
+    
+    # Formats and displays the KD plot with a symmetrical logarithmic y-axis
+    ax.set_xlabel('Concentration (ug/ml)')
+    ax.set_ylabel('K_D (ug/ml)')
+    ax.set_title(f'{title_prefix} - Equilibrium Constant (K_D)')
+    ax.set_yscale('symlog')
+    ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+    ax.grid(True, linestyle='--', alpha=0.5)
     plt.show()
 
 def plot_binding_curves(data, title, pre_baseline_seconds=10, tail_avg_seconds=5):
@@ -1714,7 +1923,7 @@ def plot_binding_curves(data, title, pre_baseline_seconds=10, tail_avg_seconds=5
     # Extracts the raw sensorgram data
     sensor = data['sensor']
     
-    # Initialises the Matplotlib figure
+    # Initialises the figure
     fig, ax = plt.subplots(figsize=(10, 6))
     
     # Initialises the Plotly figure
@@ -1793,14 +2002,100 @@ def plot_binding_curves(data, title, pre_baseline_seconds=10, tail_avg_seconds=5
     plt.tight_layout()
     plt.show()
 
-def run_binding_kinetics_analysis(files):
+def plot_overall_rates_vs_conc(sc_data, title_prefix):
+    '''Plots boxplots and stripplots for individual kinetic rates (k_obs, k_a, k_d, K_D)
+    grouped by concentration across all assay measurements.
+
+    Args:
+        sc_data (list): A list of data dictionaries containing 'fits'.
+        title_prefix (str): Prefix for the plot titles.
+    '''
+    
+    records = []
+    
+    # Extracts the individual per-concentration rates from every chip in the dataset
+    for data in sc_data:
+
+        if 'fits' not in data:
+            continue
+            
+        for f in data['fits']:
+
+            if f['assoc_fit'] is not None and f['dissoc_fit'] is not None and f['conc'] > 0:
+
+                kobs = f['assoc_fit'][1]
+                kd = f['dissoc_fit'][1]
+                ka_indiv = (kobs - kd) / f['conc']
+                KD_indiv = kd / ka_indiv if ka_indiv != 0 else np.nan
+                
+                records.append({
+                    'Concentration': f['conc'],
+                    'k_obs': kobs,
+                    'k_a': ka_indiv,
+                    'k_d': kd,
+                    'K_D': KD_indiv
+                })
+    
+    # Validates that we successfully extracted data
+    if not records:
+
+        print("No individual per-concentration rates found across the dataset.")
+        return
+
+    # Converts to a DataFrame and sorts by concentration to ensure ordered x-axis categories
+    df = pd.DataFrame(records)
+    df = df.sort_values('Concentration')
+
+    # Defines the metrics, labels, and formatting rules
+    metrics = [
+        ('k_obs', 'k_obs (s$^{-1}$)', 'tab:blue', 'lightblue', False),
+        ('k_a', 'k_a (ug/ml*s)$^{-1}$', 'tab:green', 'lightgreen', False),
+        ('k_d', 'k_d (s$^{-1}$)', 'tab:red', 'lightcoral', False),
+        ('K_D', 'K_D (ug/ml)', 'tab:purple', '#d8b4e2', True)
+    ]
+
+    # Generates a separate grouped boxplot/stripplot for each metric
+    for col, ylabel, color, boxcolor, is_symlog in metrics:
+        
+        # Drops missing values for the specific metric being plotted
+        df_plot = df.dropna(subset=[col])
+
+        if df_plot.empty:
+            continue
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Seaborn automatically groups discrete x-values (Concentration) into categories
+        sns.boxplot(data=df_plot, x='Concentration', y=col, color=boxcolor, width=0.4, showfliers=False, ax=ax)
+        sns.stripplot(data=df_plot, x='Concentration', y=col, color=color, size=6, jitter=True, alpha=0.8, ax=ax)
+        
+        if is_symlog:
+            ax.set_yscale('symlog')
+            ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+        elif col == 'k_a':
+            ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+            
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel('Concentration (ug/ml)')
+        ax.set_title(f'{title_prefix} - {col} grouped by Concentration')
+        ax.grid(True, linestyle='--', alpha=0.5)
+        
+        plt.tight_layout()
+        plt.show()
+
+def run_binding_kinetics_analysis(files, assoc_duration=68.0, bulk_shift_skip=5.0, dissoc_duration=30.0):
     '''Computes binding kinetics (association/dissociation, global ka/kd/KD).
     
-    Correctly treats every flag as a new injection, automatically finding the 
-    peak to split the window into Association and Dissociation phases.
+    Uses a hybrid windowing approach:
+    1. Association: Fixed duration from start to avoid plateaus.
+    2. Dissociation: Dynamically finds the peak (bulk shift drop) for each measurement, 
+       skips the immediate drop, and fits a clean window of the tail.
 
     Args:
         files (dict): Processed sensorgram and flag data files.
+        assoc_duration (float): Seconds to fit for association (cuts off plateau).
+        bulk_shift_skip (float): Seconds to wait AFTER the peak drop before starting the fit.
+        dissoc_duration (float): How many seconds of pure dissociation tail to fit.
 
     Returns:
         dict: The updated kinetics results.
@@ -1815,18 +2110,18 @@ def run_binding_kinetics_analysis(files):
         # Skips folders containing baseline flags
         if 'baseline' in folder:
             continue
-            
+
         # Initialises an empty dictionary for the current folder
         kinetics_results[folder] = {}
         previous_file = ''
-        
+
         # Loops through each file in the folder
         for file in list(files[folder].keys()):
 
             # Processes only sensorgram files
             if 'sensorgram' in file:
 
-                # Extracts and sorts the sensorgram and flag data chronologically
+                # Extracts and sorts the sensorgram and flag data chronologically         
                 sensor = files[folder][file].sort_values('time').reset_index(drop=True)
                 flags = files[folder][previous_file].sort_values('time').reset_index(drop=True)
                 sensor['response'] = sensor['channel1']
@@ -1835,7 +2130,6 @@ def run_binding_kinetics_analysis(files):
 
                 # Loops through each row in the flags dataframe to extract concentrations
                 for _, row in flags.iterrows():
-
                     conc_val = parse_conc_flag(row['conc'])
 
                     # Appends valid concentration events to the parsed list
@@ -1846,16 +2140,16 @@ def run_binding_kinetics_analysis(files):
                 median_time_step = sensor['time'].diff().median()
                 lookahead_rows = max(1, int(5 / median_time_step))
                 
-                # Loops through each parsed event to delineate association and dissociation segments
+                # Loops through each parsed event to delineate segments
                 for i, event in enumerate(parsed):
 
                     t_start = event['time']
                     t_next = parsed[i+1]['time'] if i + 1 < len(parsed) else sensor['time'].max()
-                    
+
                     # Isolates the sensorgram zone for the current event
                     zone = sensor[(sensor['time'] >= t_start) & (sensor['time'] <= t_next)]
-
-                    # Skips the segment if there are insufficient data points
+                    
+                    # Skips segment if there are insufficient data points
                     if len(zone) < lookahead_rows + 5: 
                         continue
                         
@@ -1865,45 +2159,31 @@ def run_binding_kinetics_analysis(files):
                     # Falls back to an immediate shift if the initial drop size is empty
                     if drop_size.dropna().empty:
                         drop_size = zone['response'] - zone['response'].shift(-1)
-                        
+                    
                     # Identifies the index of the maximum drop size
                     peak_idx = drop_size.idxmax()
-                    
+
                     # Defaults to the absolute maximum peak if the delta check yields NaN
                     if pd.isna(peak_idx):
                         peak_idx = zone['response'].idxmax()
                         
                     t_peak = sensor.loc[peak_idx, 'time']
                     
-                    # Isolates the candidate dissociation zone
-                    dissoc_candidate = sensor[(sensor['time'] > t_peak) & (sensor['time'] <= t_next)]
-
-                    # Processes the dissociation zone if it contains data
-                    if not dissoc_candidate.empty:
-                        
-                        # Caps the dissociation window at 60 seconds
-                        t_cap = t_peak + 60.0
-                        dissoc_candidate = dissoc_candidate[dissoc_candidate['time'] <= t_cap]
-                        
-                        # Pinpoints a secondary dissociation event using differential gradients
-                        diffs = dissoc_candidate['response'].diff()
-                        spike_idx = diffs[diffs > 0.5].first_valid_index()
-                        
-                        # Sets the dissociation end time based on the detected spike or maximum time
-                        if spike_idx is not None:
-                            t_dissoc_end = sensor.loc[spike_idx, 'time'] - 2.0
-                        else:
-                            t_dissoc_end = dissoc_candidate['time'].max()
-                    else:
-                        t_dissoc_end = t_next
+                    # Sets association start and end time window
+                    t_assoc_start = t_start
+                    t_assoc_end = t_start + assoc_duration 
                     
+                    # Sets disociation start and end time window
+                    t_dissoc_start = t_peak + bulk_shift_skip
+                    t_dissoc_end = t_dissoc_start + dissoc_duration
+
                     # Appends the calculated segment boundaries
                     segments.append({
                         'conc': event['conc'], 
                         'meas_id': event['label'], 
-                        't_assoc_start': t_start,
-                        't_assoc_end': t_peak,
-                        't_dissoc_start': t_peak,
+                        't_assoc_start': t_assoc_start,
+                        't_assoc_end': t_assoc_end,
+                        't_dissoc_start': t_dissoc_start,
                         't_dissoc_end': t_dissoc_end
                     })
 
@@ -1934,7 +2214,6 @@ def run_binding_kinetics_analysis(files):
 
                 # Attempts a linear regression if multiple valid concentrations exist
                 if len(concs) >= 2:
-
                     slope, intercept, r_value, _, _ = linregress(concs, kobs_vals)
                     ka = slope
                     kd_from_intercept = intercept
@@ -1953,17 +2232,16 @@ def run_binding_kinetics_analysis(files):
 
                 # Assigns the compiled data to the kinetics results dictionary
                 kinetics_results[folder][file] = file_data
-            
+
             # Updates the previous file tracker
             previous_file = file
-
 
     # Loops through each folder and its assigned files in the kinetics results
     for folder, folder_files in kinetics_results.items():
 
         # Prints the section header
         print(f"\n{'='*40}\nKinetics Analysis: {folder}\n{'='*40}")
-        
+
         summary_rows = []
 
         # Loops through each file and its data content
@@ -1977,10 +2255,9 @@ def run_binding_kinetics_analysis(files):
                     'kd_dissoc_mean (s^-1)': data.get('kd_dissoc_mean', np.nan),
                     'KD (ug/ml)': data['KD'], 'kobs_fit_R2': data['kobs_r2']
                 })
-        
+
         # Displays the results in a collapsible output section if data exists
         if summary_rows:
-
             with collapsible_output(f'Global Kinetics Summary: {folder}'):
                 display(pd.DataFrame(summary_rows))
 
@@ -1990,7 +2267,7 @@ def run_binding_kinetics_analysis(files):
             # Skips files without valid fits
             if 'fits' not in data: 
                 continue
-            
+
             # Extracts the chip and measurement identifiers from the filename
             clean_filename = file.replace('Copy of ', '').strip()
             parts = clean_filename.split('_')
@@ -1998,14 +2275,13 @@ def run_binding_kinetics_analysis(files):
             measurement_id = parts[1] if len(parts) > 1 else 'Unknown'
             
             print(f'\n--- Chip ID: {chip_id} | Measurement ID: {measurement_id} ---')
-
             per_conc_rows = []
 
             # Loops through each generated curve fit
             for f in data['fits']:
 
                 warning = ''
-                
+                                
                 # Unpacks association parameters
                 Req, kobs, R0 = (f['assoc_fit'][0], f['assoc_fit'][1], f['assoc_fit'][2]) if f['assoc_fit'] is not None else (np.nan, np.nan, np.nan)
 
@@ -2037,7 +2313,7 @@ def run_binding_kinetics_analysis(files):
                     'Measurement': f['meas_id'], 'Concentration (ug/ml)': f['conc'], 'k_obs (s^-1)': kobs,
                     'k_d (s^-1)': kd, 'k_a (calc)': ka_indiv, 'K_D': KD_indiv, 'R_eq': Req, 'Warning': warning.strip('; ')
                 })
-                
+
             # Displays the results in a collapsible output section if concentration rows exist
             if per_conc_rows:
 
@@ -2048,17 +2324,33 @@ def run_binding_kinetics_analysis(files):
 
             # Displays the kinetic fit curves in a collapsible output section
             with collapsible_output(f'Kinetic Fit Curves: {file}'):
-                plot_kinetic_curves(data, f'Kinetic Curves — {chip_id}')
+                plot_kinetic_curves(data, f'Kinetic Curves - {chip_id}')
 
-            # Displays the observed rates against concentration in a collapsible output section
+            # Displays all kinetic parameters against concentration sequentially
             if 'ka' in data:
-
-                with collapsible_output(f'K_obs vs Concentration: {file}'):
-                    plot_kobs_vs_conc(data, f'k_obs vs Concentration — {chip_id}')
+                with collapsible_output(f'Rates vs Concentration: {file}'):
+                    plot_rates_vs_conc(data, f'Rates vs Concentration - {chip_id}')
 
             # Displays the aligned binding curves in a collapsible output section
-            with collapsible_output(f'Aligned Binding Curves: {file}'):
-                plot_binding_curves(data, f'Binding Curves Overlay — {chip_id}')
+            with collapsible_output(f'Binding Curves: {file}'):
+                plot_binding_curves(data, f'Binding Curves Overlay - {chip_id}')
+
+    # Extracts all individual data dictionaries that contain fits and global rates
+    all_global_data = []
+
+    for folder, folder_files in kinetics_results.items():
+
+        for file, data in folder_files.items():
+
+            if 'fits' in data:
+                all_global_data.append(data)
                 
-    # Returns the final updated dictionary
+    # Checks if valid data was found across the analysis
+    if all_global_data:
+        print(f"\n{'='*40}\nOverall Kinetics Distributions\n{'='*40}")
+            
+        # Plots the Per-Concentration rate distributions (multiple values per chip grouped by conc)
+        with collapsible_output('Overall Distributions by Concentration'):
+            plot_overall_rates_vs_conc(all_global_data, 'Overall')
+                
     return kinetics_results

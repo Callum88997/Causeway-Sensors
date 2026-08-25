@@ -1,6 +1,7 @@
 # Imports required packages
 import os
 import pandas as pd
+import re
 
 # Defines configuration constants for data directories
 DATA_DIR = "data"
@@ -36,6 +37,23 @@ def convert_numeric_columns(df, threshold=0.9):
 
     # Returns the updated dataframe
     return df
+
+def is_valid_chip(file_name):
+    '''Evaluates if the file name contains a valid chip ID.
+
+    Args:
+        file_name (str): The name of the file being validated.
+
+    Returns:
+        bool: True if the file name contains a valid chip format, False otherwise.
+    '''
+
+    # Defines the regex pattern for a real chip
+    # Looks for 'B' followed by digits then 'R' followed by digits
+    chip_pattern = r"B\d+R\d+"
+    
+    # Returns True if the pattern is found in the filename
+    return bool(re.search(chip_pattern, file_name))
 
 def is_valid_prg_only(df, file_name):
     '''Evaluates if 'prg' is the only active reagent, ignoring standard control steps.
@@ -194,6 +212,11 @@ def load_bucket_files(tables):
 
             # Loops through each file in the current directory
             for file in files:
+
+                # Validates the file name to ensure it contains a valid chip ID
+                if not is_valid_chip(file):
+                    print(f"SKIPPING: '{file}' (Does not contain a valid chip ID)")
+                    continue
 
                 # Constructs paths and extracts the base filename
                 path = os.path.join(root, file)
