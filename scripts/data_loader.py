@@ -4,9 +4,9 @@ import pandas as pd
 import re
 
 # Defines configuration constants for data directories
-DATA_DIR = "data"
-TABLE_DIR = os.path.join(DATA_DIR, "tables")
-BUCKET_DIR = os.path.join(DATA_DIR, "buckets")
+DATA_DIR = 'data'
+TABLE_DIR = os.path.join(DATA_DIR, 'tables')
+BUCKET_DIR = os.path.join(DATA_DIR, 'buckets')
 
 # Declares column names representing time
 time_cols = ['t', 'time']
@@ -26,7 +26,7 @@ def convert_numeric_columns(df, threshold=0.9):
     for col in df.columns:
 
         # Attempts to convert column values to numeric, coercing errors to NaN
-        converted = pd.to_numeric(df[col], errors="coerce")
+        converted = pd.to_numeric(df[col], errors='coerce')
 
         # Calculates the ratio of valid numeric values
         numeric_ratio = converted.notna().sum() / len(df)
@@ -49,8 +49,8 @@ def is_valid_chip(file_name):
     '''
 
     # Defines the regex pattern for a real chip
-    # Looks for 'B' followed by digits then 'R' followed by digits
-    chip_pattern = r"B\d+R\d+"
+    # Looks for 'B' or 'R' followed by digits then 'R' followed by digits
+    chip_pattern = r'B\d+R\d+|R\d+R\d+'
     
     # Returns True if the pattern is found in the filename
     return bool(re.search(chip_pattern, file_name))
@@ -110,16 +110,16 @@ def load_tables():
     for file in os.listdir(TABLE_DIR):
 
         # Processes only CSV files
-        if file.endswith(".csv"):
+        if file.endswith('.csv'):
 
             # Extracts the table name by removing the file extension
-            name = file.replace(".csv", "")
+            name = file.replace('.csv', '')
 
             # Constructs the full file path
             path = os.path.join(TABLE_DIR, file)
 
             # Prints the current table being loaded
-            print(f"Loading table: {name}")
+            print(f'Loading table: {name}')
 
             # Attempts to load and process the table data
             try:
@@ -137,7 +137,7 @@ def load_tables():
             except pd.errors.EmptyDataError:
 
                 # Prints a warning for empty files
-                print(f"EMPTY FILE SKIPPED: {file}")
+                print(f'EMPTY FILE SKIPPED: {file}')
 
                 # Assigns an empty dataframe
                 tables[name] = pd.DataFrame()
@@ -160,7 +160,7 @@ def load_bucket_files(tables):
     
     # Checks if the bucket directory exists and returns an empty dictionary if not
     if not os.path.exists(BUCKET_DIR):
-        print(f"Directory not found: {BUCKET_DIR}")
+        print(f'Directory not found: {BUCKET_DIR}')
         return buckets
 
     # Retrieves a list of all subdirectories within the bucket directory
@@ -238,7 +238,7 @@ def load_bucket_files(tables):
                 try:
 
                     # Reads parquet files
-                    if file.endswith(".parquet"):
+                    if file.endswith('.parquet'):
                         df = pd.read_parquet(path)
 
                     # Reads standard CSV files
@@ -257,16 +257,16 @@ def load_bucket_files(tables):
                     if is_flag_bucket:
 
                         # Checks if the time column exists
-                        if "time" in df.columns:
+                        if 'time' in df.columns:
 
                             # Converts the time column to strings
-                            time_str = df["time"].astype(str)
+                            time_str = df['time'].astype(str)
 
                             # Formats and calculates elapsed seconds if time strings contain separators
-                            if time_str.str.contains(r"[:-]").any():
-                                t_td = pd.to_timedelta(time_str.str.replace("-", ":", regex=False))
-                                start = t_td.iloc[0].floor("min")
-                                df["time"] = (t_td - start).dt.total_seconds().astype(int)
+                            if time_str.str.contains(r'[:-]').any():
+                                t_td = pd.to_timedelta(time_str.str.replace('-', ':', regex=False))
+                                start = t_td.iloc[0].floor('min')
+                                df['time'] = (t_td - start).dt.total_seconds().astype(int)
 
                         # Runs the validation check to ensure only 'prg' is active
                         if not is_valid_prg_only(df, file):
@@ -280,7 +280,7 @@ def load_bucket_files(tables):
 
                 # Catches and reports any errors during file loading
                 except Exception as e:
-                    print(f"Failed loading {path}: {e}")
+                    print(f'Failed loading {path}: {e}')
                     
     # Returns the nested dictionary of loaded bucket files
     return buckets
@@ -296,19 +296,19 @@ def load_titan_data():
     '''
 
     # Prints a progress message for table loading
-    print("Loading database tables...")
+    print('Loading database tables...')
 
     # Loads the database tables
     tables = load_tables()
     
     # Prints a progress message for bucket loading
-    print("Loading and filtering bucket data...")
+    print('Loading and filtering bucket data...')
 
     # Loads and organises the bucket files
     buckets = load_bucket_files(tables)
     
     # Prints a completion message
-    print("Titan data load complete.")
+    print('Titan data load complete.')
 
     # Returns the loaded tables and buckets
     return tables, buckets

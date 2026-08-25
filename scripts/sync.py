@@ -4,44 +4,26 @@ import shutil
 import pandas as pd
 from scripts.supabase_client import supabase
 from pandas.errors import EmptyDataError
+from concurrent.futures import ThreadPoolExecutor
 
 # Defines configuration constants for data directories
-DATA_DIR = "data"
+DATA_DIR = 'data'
+TABLE_DIR = os.path.join(DATA_DIR, 'tables')
+BUCKET_DIR = os.path.join(DATA_DIR, 'buckets')
 
-TABLE_DIR = os.path.join(DATA_DIR, "tables")
-BUCKET_DIR = os.path.join(DATA_DIR, "buckets")
+# Threading configurations (Adjust if you hit rate limits)
+MAX_TABLE_WORKERS = 5
+MAX_FILE_WORKERS = 15
 
 def get_tables():
-    '''Retrieves the names of all accessible Supabase database tables.
-
-    Returns:
-        list[str]: Available table names.
-    '''
-
-    # Executes the RPC call to retrieve table names
-    response = supabase.rpc("get_tables").execute()
-
-    # Extracts table names from the response data
-    tables = [row["table_name"] for row in response.data]
-
-    # Returns the list of tables
-    return tables
+    '''Retrieves the names of all accessible Supabase database tables.'''
+    response = supabase.rpc('get_tables').execute()
+    return [row['table_name'] for row in response.data]
 
 def get_buckets():
-    '''Retrieves the names of all accessible Supabase storage buckets.
-
-    Returns:
-        list[str]: Available storage-bucket names.
-    '''
-
-    # Fetches the list of buckets from the Supabase storage
+    '''Retrieves the names of all accessible Supabase storage buckets.'''
     response = supabase.storage.list_buckets()
-
-    # Extracts bucket names from the response
-    buckets = [bucket.name for bucket in response]
-
-    # Returns the list of buckets
-    return buckets
+    return [bucket.name for bucket in response]
 
 # Retrieves and stores the available tables and buckets
 TABLES = get_tables()
@@ -49,224 +31,134 @@ BUCKETS = get_buckets()
 
 def clear_local_data():
     '''Removes the previous local export and recreates the required directories.'''
-
-    # Removes the existing data directory if it exists
     if os.path.exists(DATA_DIR):
         shutil.rmtree(DATA_DIR)
-
-    # Recreates the necessary table and bucket directories
     os.makedirs(TABLE_DIR)
     os.makedirs(BUCKET_DIR)
-
-    # Prints a confirmation message
-    print("Old data cleared")
+    print('Old data cleared')
 
 def list_all_items(bucket, remote_path):
-    '''Retrieves every item in a storage path, including paginated results.
-
-    Args:
-        bucket (str): Name of the Supabase storage bucket.
-        remote_path (str): Path within the bucket to enumerate.
-
-    Returns:
-        list[dict]: Metadata for every item found at the requested path.
-    '''
-
-    # Initialises variables for pagination
+    '''Retrieves every item in a storage path, including paginated results.'''
     all_items = []
     offset = 0
     limit = 100
 
-    # Continues processing until all available items have been handled
     while True:
-        
-        # Fetches a batch of items from the specified bucket and path
-        items = supabase.storage.from_(bucket).list(remote_path, {"limit": limit, "offset": offset,})
-
-        # Breaks the loop if no items are returned
+        items = supabase.storage.from_(bucket).list(remote_path, {'limit': limit, 'offset': offset,})
         if not items:
             break
-
-        # Appends the retrieved items to the complete list
         all_items.extend(items)
-
-        # Breaks the loop if the number of retrieved items is less than the limit
         if len(items) < limit:
             break
-
-        # Increments the offset for the next pagination batch
         offset += limit
-
-    # Returns the complete list of items
     return all_items
 
+def process_single_table(table):
+    '''Worker function to download and save a single table.'''
+    print(f'Downloading table: {table}')
+    response = supabase.table(table).select('*').execute()
+    df = pd.DataFrame(response.data)
+    filepath = os.path.join(TABLE_DIR, f'{table}.csv')
+    df.to_csv(filepath, index=False)
+    print(f'Saved {len(df)} rows for {table}')
+
 def download_tables():
-    '''Downloads every configured database table and saves it as a local CSV file.'''
-
-    # Loops through each available table
-    for table in TABLES:
-
-        # Prints the current table being downloaded
-        print(f"Downloading table: {table}")
-
-        # Executes a select query to retrieve all records from the table
-        response = supabase.table(table).select("*").execute()
-
-        # Converts the response data into a pandas dataframe
-        df = pd.DataFrame(response.data)
-
-        # Defines the local filepath for the CSV output
-        filepath = os.path.join(TABLE_DIR, f"{table}.csv")
-
-        # Saves the dataframe to a CSV file without the index
-        df.to_csv(filepath, index=False)
-
-        # Prints the number of rows saved
-        print(f"Saved {len(df)} rows")
+    '''Downloads configured database tables in parallel.'''
+    print('\n--- Starting Table Downloads ---')
+    with ThreadPoolExecutor(max_workers=MAX_TABLE_WORKERS) as executor:
+        executor.map(process_single_table, TABLES)
 
 def add_bucket_headers(filepath, bucket):
-    '''Adds known column headers to headerless files from supported buckets.
-
-    Args:
-        filepath (str): Local path to the downloaded file.
-        bucket (str): Source bucket used to select the expected schema.
-    '''
-
-    # Checks if the file is empty and skips processing if true
+    '''Adds known column headers to headerless files from supported buckets.'''
     if os.path.getsize(filepath) == 0:
-        
-        # Prints a skipping message
-        print(f"Skipping empty file: {filepath}")
-        
-        # Returns control to the calling code
         return
 
-    # Attempts to parse and add headers based on the bucket name
     try:
-
-        # Assigns column headers for the AMF_FLAGS bucket
-        if bucket == "AMF_FLAGS":
-                columns = ["time", "information"]
-        
-        # Assigns column headers for the RefPoly4 bucket
-        elif bucket == "RefPoly4":
-            columns = ["time", "channel1", "channel2"]
-    
-        # Returns control to the calling code for unsupported buckets
+        if bucket == 'AMF_FLAGS':
+            df = pd.read_csv(filepath, header=None)
+            if df.shape[1] == 4:
+                df.columns = ['index', 'time', 'occurrence', 'information']
+                df = df[['time', 'information']]
+            elif df.shape[1] == 2:
+                df.columns = ['time', 'information']
+        elif bucket == 'RefPoly4':
+            df = pd.read_csv(filepath, header=None)
+            if df.shape[1] == 3:
+                df.columns = ['time', 'channel1', 'channel2']
         else:
             return
-
-        # Reads the headerless CSV file into a dataframe
-        df = pd.read_csv(filepath, header=None)
     
-        # Applies the assigned column headers to the dataframe
-        df.columns = columns
-    
-        # Saves the updated dataframe back to the CSV file
         df.to_csv(filepath, index=False)
-    
-        # Prints a confirmation message
-        print(f"Added headers to {filepath}")
-    
-    # Catches empty data errors and skips the file
     except EmptyDataError:
-        
-        # Prints a warning message
-        print(f"Warning: No columns to parse in {filepath}. Skipping.")
-        
-        # Returns control to the calling code
         return
 
+def get_all_file_paths(bucket, initial_remote_path, initial_local_path):
+    '''Iteratively builds a flat list of all files to download using a stack.'''
+    files_to_download = []
+    
+    # We use a list as a stack to keep track of folders we need to explore
+    folders_to_explore = [(initial_remote_path, initial_local_path)]
+    
+    while folders_to_explore:
+        current_remote, current_local = folders_to_explore.pop()
+        items = list_all_items(bucket, current_remote)
+        
+        for item in items:
+            name = item['name']
+            full_path = f'{current_remote}/{name}' if current_remote else name
+            local_file_path = os.path.join(current_local, name)
+            
+            if item['metadata'] is None:
+                # It's a folder, create it and add to our stack to explore in the next loop
+                os.makedirs(local_file_path, exist_ok=True)
+                folders_to_explore.append((full_path, local_file_path))
+            else:
+                # It's a file, add to our master list
+                files_to_download.append({
+                    'bucket': bucket,
+                    'remote_path': full_path,
+                    'local_path': local_file_path
+                })
+                
+    return files_to_download
+
+def process_single_file(file_info):
+    '''Worker function to download and process a single file.'''
+    bucket = file_info['bucket']
+    remote_path = file_info['remote_path']
+    local_path = file_info['local_path']
+    
+    print(f'Downloading: {remote_path}')
+    content = supabase.storage.from_(bucket).download(remote_path)
+    
+    with open(local_path, 'wb') as f:
+        f.write(content)
+        
+    if bucket in ['AMF_FLAGS', 'RefPoly4']:
+        add_bucket_headers(local_path, bucket)
+
 def download_buckets():
-    '''Downloads all configured storage buckets into the local export directory.'''
-
-    # Loops through each available storage bucket
+    '''Downloads all configured storage buckets using parallel processing.'''
+    print('\n--- Scanning for files (Fast phase) ---')
+    all_files = []
+    
     for bucket in BUCKETS:
-
-        # Prints the current bucket being downloaded
-        print(f"\nDownloading bucket: {bucket}")
-
-        # Defines the local directory path for the bucket
         bucket_path = os.path.join(BUCKET_DIR, bucket)
-
-        # Creates the bucket directory if it does not already exist
         os.makedirs(bucket_path, exist_ok=True)
+        # Gathers all files for this bucket
+        all_files.extend(get_all_file_paths(bucket, '', bucket_path))
 
-        # Initiates the recursive folder download for the bucket
-        download_folder(bucket=bucket, remote_path="", local_path=bucket_path)
-
-def download_folder(bucket, remote_path, local_path):
-    '''Recursively downloads a remote storage folder and preserves its hierarchy.
-
-    Args:
-        bucket (str): Name of the source storage bucket.
-        remote_path (str): Current path within the remote bucket.
-        local_path (str): Matching local directory where files are written.
-    '''
-
-    # Retrieves all items within the current remote path
-    items = list_all_items(bucket, remote_path)
-
-    # Loops through each retrieved item
-    for item in items:
-
-        # Extracts the name of the item
-        name = item["name"]
-
-        # Constructs the full remote path for the item
-        if remote_path:
-            full_path = f"{remote_path}/{name}"
-        else:
-            full_path = name
-
-        # Constructs the corresponding local file path
-        local_file_path = os.path.join(local_path, name)
-
-        # Checks if the item is a folder (metadata is None)
-        if item["metadata"] is None:
-
-            # Prints the folder being entered
-            print("Entering folder:", full_path)
-
-            # Creates the local directory for the folder
-            os.makedirs(local_file_path, exist_ok=True)
-
-            # Recursively calls the function to download the folder contents
-            download_folder(bucket, full_path, local_file_path)
-
-        # Processes the item as a file if metadata exists
-        else:
-
-            # Prints the file being downloaded
-            print("Downloading file:", full_path)
-
-            # Downloads the file content from the Supabase bucket
-            content = supabase.storage.from_(bucket).download(full_path)
-
-            # Opens the local file safely and writes the downloaded content
-            with open(local_file_path, "wb") as f:
-                f.write(content)
-
-            # Adds missing headers if the file belongs to specific buckets
-            if bucket in ["AMF_FLAGS", "RefPoly4"]:
-                add_bucket_headers(local_file_path, bucket)
+    print(f'\n--- Starting parallel download of {len(all_files)} files ---')
+    # Maps the entire master list of files to the thread pool
+    with ThreadPoolExecutor(max_workers=MAX_FILE_WORKERS) as executor:
+        executor.map(process_single_file, all_files)
 
 def run_sync():
     '''Refreshes the complete local data export from Supabase tables and buckets.'''
-
-    # Clears any existing local data
     clear_local_data()
-
-    # Downloads all tables from the database
     download_tables()
-
-    # Downloads all files from the storage buckets
     download_buckets()
+    print('\nSYNC COMPLETE')
 
-    # Prints a completion message
-    print("\nSYNC COMPLETE")
-
-# Executes the synchronisation process if the script is run directly
-if __name__ == "__main__":
+if __name__ == '__main__':
     run_sync()
-    
