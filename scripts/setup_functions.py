@@ -6,6 +6,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.graph_objects as go
+import plotly.express as px
+import plotly.figure_factory as ff
 from scipy.optimize import curve_fit
 from IPython.display import display, HTML
 import ipywidgets as widgets
@@ -163,37 +165,55 @@ def plot_all_statistics(df, x_col, y_col, ylabel='Signal', title_prefix=''):
     
     # Declares title prefix variable
     title_prefix = f'{title_prefix} - ' if title_prefix else ''
-    
+
+    # Global plot settings for aesthetics
+    plot_width = 1000
+    plot_height = 650
+    colour_scheme = px.colors.qualitative.Vivid
+
+    # Safely determine hover columns to prevent KeyError if 'chip_id' is missing
+    hover_cols = ['chip_id'] if 'chip_id' in df.columns else None
+
     # Plots the spread and density of signal values at each experimental stage using box and strip plots
-    plt.figure(figsize=(10, 6))
-    sns.boxplot(data=df, x=x_col, y=y_col)
-    sns.stripplot(data=df, x=x_col, y=y_col, color='black', alpha=0.5, jitter=False)
-    plt.xticks(rotation=90)
-    plt.ylabel(ylabel)
-    plt.ylim(-10, 15)
-    plt.title(f'{title_prefix}Stage Boxplot & Stripplot')
-    plt.tight_layout()
-    plt.show()
-    plt.close()
+    fig_box = px.box(df, x=x_col, y=y_col, color=x_col, points="all", hover_data=hover_cols, title=f'{title_prefix}Stage Boxplot & Stripplot', labels={x_col: 'Experimental Stage', y_col: ylabel}, color_discrete_sequence=colour_scheme, template='plotly_white')
+
+    # Adjust jitter and opacity to match original styling and set y-axis limits
+    fig_box.update_traces(jitter=0.2, pointpos=0, marker=dict(opacity=0.5, line=dict(width=1, color='black'))) 
+
+    fig_box.update_layout(width=plot_width, height=plot_height, showlegend=False, yaxis=dict(autorange=True, rangemode="normal"))
+    fig_box.show()
 
     # Plots the distribution of data across different stages using violin plots
-    plt.figure(figsize=(10, 6))
-    sns.violinplot(data=df, x=x_col, y=y_col, palette='muted')
-    plt.xticks(rotation=45)
-    plt.ylabel(ylabel)
-    plt.title(f'{title_prefix}Stage Violin Plot')
-    plt.tight_layout()
-    plt.show()
-    plt.close()
+    fig_violin = px.violin(df, x=x_col, y=y_col, color=x_col, box=False, hover_data=hover_cols, title=f'{title_prefix}Stage Violin Plot', labels={x_col: 'Experimental Stage', y_col: ylabel}, color_discrete_sequence=colour_scheme, template='plotly_white')
+                           
+    fig_violin.update_layout(width=plot_width, height=plot_height, showlegend=False, xaxis_tickangle=45)
+    fig_violin.show()
 
     # Plots the density profiles for signal values categorised by stage
-    plt.figure(figsize=(10, 6))
-    sns.kdeplot(data=df, x=y_col, hue=x_col, fill=True, common_norm=False, alpha=0.3)
-    plt.xlabel(ylabel)
-    plt.title(f'{title_prefix}Signal Density Profiles Per Stage')
-    plt.tight_layout()
-    plt.show()
-    plt.close()
+    df_clean = df.dropna(subset=[x_col, y_col])
+    categories = df_clean[x_col].unique()
+    
+    hist_data = []
+    group_labels = []
+
+    for cat in categories:
+        cat_data = df_clean[df_clean[x_col] == cat][y_col]
+        
+        # Only include categories with actual variance to prevent KDE LinAlgError
+        if cat_data.nunique() > 1:
+            hist_data.append(cat_data)
+            group_labels.append(str(cat))
+
+    # Check if we have any valid data left to plot
+    if hist_data:
+
+        # Create overlapping density curves without the underlying histogram bars or rug marks
+        fig_density = ff.create_distplot(hist_data, group_labels, show_hist=False, show_rug=False, colors=colour_scheme[:len(hist_data)])
+        
+        fig_density.update_layout(title=f'{title_prefix}Signal Density Profiles Per Stage', xaxis_title=ylabel, yaxis_title='Density', width=plot_width, height=plot_height, template='plotly_white')
+        fig_density.show()
+    else:
+        print(f"Skipping Density Plot: Not enough variance in '{y_col}' across '{x_col}' to calculate KDE.")
 
     # Plots the correlation matrix to show how numeric measurements vary together
     plt.figure(figsize=(10, 6))
@@ -215,7 +235,7 @@ def plot_all_statistics(df, x_col, y_col, ylabel='Signal', title_prefix=''):
         # Plots mean signal values for every chip and experimental stage as a heatmap
         plt.figure(figsize=(10, 6))
 
-        pivot_df = df.pivot_table(index='chip_id', columns=x_col, values=y_col, aggfunc='mean')
+        pivot_df = df.pivot_table(index='chip_id', columns=x_col, values=y_col, aggfunc='mean', observed=False)
         
         sns.heatmap(pivot_df, annot=False, cmap='viridis', fmt='.2f', cbar_kws={'label': ylabel})
         plt.xticks(rotation=45)
@@ -779,6 +799,7 @@ def update_immob_flags(flag_df, plot_data, file_path=None):
     Returns:
         pd.DataFrame: Updated flag dataframe.
     '''
+
     # Creates a copy of the flag data to preserve original data
     flag_data = flag_df.copy()
 
@@ -1205,8 +1226,12 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
                 row_features[f'{ch}_slope'] = slope
                 
                 # Shape statistics 
-                row_features[f'{ch}_skew'] = skew(signal)
-                row_features[f'{ch}_kurtosis'] = kurtosis(signal)
+                if np.std(signal) < 1e-8:
+                    row_features[f'{ch}_skew'] = 0.0
+                    row_features[f'{ch}_kurtosis'] = 0.0
+                else:
+                    row_features[f'{ch}_skew'] = skew(signal)
+                    row_features[f'{ch}_kurtosis'] = kurtosis(signal)
                 
             elif len(signal) == 1:
 
@@ -1365,6 +1390,9 @@ class collapsible_output:
             
             .custom-clean-output .dataframe {
                 max-width: none !important;
+                display: block !important;
+                overflow-x: auto !important;
+                white-space: nowrap !important;
             }
             
             .custom-clean-output table {
@@ -1416,7 +1444,8 @@ def generate_and_display_summary(data_list, val_cols, title, drop_na_col=None):
     df = pd.concat(data_list, ignore_index=True)
 
     # Concatenates the dataframes and drops NA values if a column is specified
-    if drop_na_col: 
+    if drop_na_col:
+
         # Creates a copy of the dataframe to preserve the original data
         df = df.dropna(subset=[drop_na_col]).copy()
         
