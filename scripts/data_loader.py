@@ -264,8 +264,10 @@ def load_bucket_files(tables):
 
                             # Formats and calculates elapsed seconds if time strings contain separators
                             if time_str.str.contains(r'[:-]').any():
+
                                 t_td = pd.to_timedelta(time_str.str.replace('-', ':', regex=False))
                                 start = t_td.iloc[0].floor('min')
+                                
                                 df['time'] = (t_td - start).dt.total_seconds().astype(int)
 
                         # Runs the validation check to ensure only 'prg' is active

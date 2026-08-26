@@ -54,74 +54,67 @@ from scripts.setup_functions import collapsible_output
     return df_clean
 """
 
-def detect_anomalies(df, feature_cols, stages=None, contamination='auto'):
+def detect_anomalies(df, feature_cols, stages=None, contamination=0.5):
     '''Applies an Isolation Forest to detect multivariate outliers robustly.
-    If stages are provided, evaluates each stage independently to prevent score dilution.
+    Evaluates each inferred stage independently to prevent score dilution.
+    If a chip is anomalous in ANY single stage, it is flagged as an outlier.
 
     Args:
         df (pd.DataFrame): The dataframe to analyse.
         feature_cols (list[str]): The list of feature columns to evaluate.
-        stages (list[str], optional): Known stages to evaluate independently. Defaults to None.
-        contamination (str | float, optional): The proportion of outliers. Defaults to 0.05.
+        contamination (str | float, optional): The proportion of outliers. Defaults to 'auto'.
 
     Returns:
         pd.DataFrame: The dataframe with 'anomaly' (-1 for outlier, 1 for inlier) and 'anomaly_score'.
     '''
+
     df_clean = df.copy()
-    
-    # If stages are provided, evaluate each stage independently
-    if stages:
-        worst_scores = pd.Series(index=df_clean.index, data=np.inf)
-        is_anomaly = pd.Series(index=df_clean.index, data=1)
+
+    # Initialise trackers for all chips
+    worst_scores = pd.Series(index=df_clean.index, data=np.inf)
+    is_anomaly = pd.Series(index=df_clean.index, data=1)
+
+    # Group columns dynamically
+    stage_groups = {}
+
+    for col in feature_cols:
+
+        stage = str(col).rsplit('_', 1)[0]
+
+        if stage not in stage_groups:
+
+            stage_groups[stage] = []
+
+        stage_groups[stage].append(col)
+
+    # Loop through the pre-grouped dictionary
+    for stage, stage_cols in stage_groups.items():
+            
+        df_stage = df_clean[stage_cols].dropna()
         
-        for stage in stages:
-            # Dynamically find columns that belong to this exact stage
-            stage_cols = [c for c in feature_cols if c == stage or str(c).rsplit('_', 1)[0] == stage]
-            
-            if not stage_cols: 
-                continue
-                
-            # Impute missing values for this specific stage
-            df_stage = df_clean[stage_cols].fillna(df_clean[stage_cols].median())
-            
-            if df_stage.empty or len(df_stage) < 2:
-                continue
-                
-            scaler = RobustScaler()
-            X_scaled = scaler.fit_transform(df_stage)
-            
-            iso = IsolationForest(n_estimators=500, contamination=contamination, random_state=8030)
-            preds = iso.fit_predict(X_scaled)
-            scores = iso.decision_function(X_scaled)
-            
-            # Keep the lowest (most anomalous) score for each chip
-            current_scores = pd.Series(scores, index=df_clean.index)
-            worst_scores = np.minimum(worst_scores, current_scores)
-            
-            # If a chip fails ANY stage, flag it as an anomaly (-1)
-            is_anomaly = np.where(preds == -1, -1, is_anomaly)
-            
-        # Clean up the infinite initialization fallback
-        worst_scores.replace(np.inf, 0.0, inplace=True)
-        
-        df_clean['anomaly'] = is_anomaly
-        df_clean['anomaly_score'] = worst_scores
-        
-    else:
-        # Fallback to global detection (original behavior)
-        df_clean[feature_cols] = df_clean[feature_cols].fillna(df_clean[feature_cols].median())
-        
-        if df_clean.empty or len(df_clean) < 2:
-            df_clean['anomaly'] = 1
-            df_clean['anomaly_score'] = 0.0
-            return df_clean
-            
+        if df_stage.empty or len(df_stage) < 2:
+            continue
+
         scaler = RobustScaler()
-        X_scaled = scaler.fit_transform(df_clean[feature_cols])
+        X_scaled = scaler.fit_transform(df_stage)
         
-        iso = IsolationForest(n_estimators=500, contamination=contamination, random_state=8030)
-        df_clean['anomaly'] = iso.fit_predict(X_scaled)
-        df_clean['anomaly_score'] = iso.decision_function(X_scaled)
+        iso = IsolationForest(n_estimators=100, contamination=contamination, random_state=8030, n_jobs=-1)
+        preds = iso.fit_predict(X_scaled)
+        scores = iso.decision_function(X_scaled)
+        
+        # Keep the lowest (most anomalous) score for each chip
+        current_scores = pd.Series(scores, index=df_stage.index)
+        current_preds = pd.Series(preds, index=df_stage.index)
+        
+        # Update the master trackers ONLY for those specific chips using
+        worst_scores.loc[df_stage.index] = np.minimum(worst_scores.loc[df_stage.index], current_scores)
+        is_anomaly.loc[df_stage.index] = np.minimum(is_anomaly.loc[df_stage.index], current_preds)
+        
+    # Clean up the infinite initialization fallback
+    worst_scores.replace(np.inf, 0.0, inplace=True)
+    
+    df_clean['anomaly'] = is_anomaly
+    df_clean['anomaly_score'] = worst_scores
         
     return df_clean
 
@@ -136,6 +129,7 @@ def pivot_chip_data(df, stage_col, val_col):
     Returns:
         pd.DataFrame: The pivoted dataframe.
     '''
+
     return df.pivot_table(index='chip_id', columns=stage_col, values=val_col, aggfunc='mean', observed=False)
    
 def summarise_correlations(corr_matrix, label, num=3):
@@ -246,7 +240,7 @@ def analyse_anomaly_drivers(df, anomalies_df, label, num=3):
         anom_val = anomaly_mean[stage]
         print(f'  - {stage}: Anomaly Avg = {anom_val:.3f} | Normal Avg = {norm_val:.3f} (Z-Score: {z:.2f})')
 
-def create_wide_intra(intra_df, val_col, keep_metrics=['std']):
+def create_wide_intra(intra_df, val_col, keep_metrics=['slope']):
     '''Pivots multiple intra-stage metrics and suffixes columns to prevent overlap.
     Dynamically identifies all metric columns belonging to the target channel.
 
@@ -325,23 +319,21 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
     # Filters out non-informative startup stages
     events_df = events_df[~events_df['stage'].isin(['Start', 'Initial'])]
 
-    unique_stages = events_df['stage'].unique().tolist()
-
     # Pivots the tables to prepare for anomaly detection
     wide_events = pivot_chip_data(events_df, 'stage', val_col)
     wide_changes = pivot_chip_data(changes_df, 'stage', change_col)
     wide_intra = create_wide_intra(intra_df, intra_target)
 
     # Detects absolute signal anomalies
-    anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist(), unique_stages)
+    anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist())
     outliers_abs = get_outlier_chips(anomalies_abs)
 
     # Detects stage delta anomalies
-    anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist(), unique_stages)
+    anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist())
     outliers_delta = get_outlier_chips(anomalies_delta)
 
     # Detects intra-stage kinetic anomalies
-    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist(), unique_stages)
+    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
     outliers_intra = get_outlier_chips(anomalies_intra)
 
     # Displays the results in a collapsible output section
@@ -386,8 +378,7 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
         print(f'\nPotential Anomalous Chips (Intra-stage Kinetics): {len(outliers_intra)}')
         analyse_anomaly_drivers(wide_intra, anomalies_intra, f'PEL {intra_target} Intra-stage Kinetics')
 
-    return anomalies_abs, anomalies_delta, anomalies_intra, outliers_abs, outliers_delta, outliers_intra
-    #return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra
+    return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra
 
 def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='channel1', change_col='channel1_change', intra_val_col=None, title='Immobilisation Analysis'):
     '''Analyses one immobilisation split across signal, delta, and kinetic features.
@@ -411,8 +402,6 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
 
     # Filters out non-informative startup stages
     events_df = events_df[~events_df['stage'].isin(['Start', 'Initial'])]
-
-    unique_stages = events_df['stage'].unique().tolist()
     
     # Pivots the tables to prepare for anomaly detection
     wide_events = pivot_chip_data(events_df, 'stage', val_col)
@@ -420,15 +409,15 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
     wide_intra = create_wide_intra(intra_df, intra_target)
 
     # Detects absolute signal anomalies
-    anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist(), unique_stages)
+    anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist())
     outliers_abs = get_outlier_chips(anomalies_abs)
 
     # Detects stage delta anomalies
-    anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist(), unique_stages)
+    anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist())
     outliers_delta = get_outlier_chips(anomalies_delta)
 
     # Detects intra-stage kinetic anomalies
-    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist(), unique_stages)
+    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
     outliers_intra = get_outlier_chips(anomalies_intra)
 
     # Displays the results in a collapsible output section
@@ -2325,19 +2314,15 @@ def plot_overall_rates_vs_conc(sc_data, title_prefix):
         plt.tight_layout()
         plt.show()
 
-def run_binding_kinetics_analysis(files, assoc_duration=68.0, bulk_shift_skip=5.0, dissoc_duration=30.0):
+def run_binding_kinetics_analysis(files):
     '''Computes binding kinetics (association/dissociation, global ka/kd/KD).
     
-    Uses a hybrid windowing approach:
-    1. Association: Fixed duration from start to avoid plateaus.
-    2. Dissociation: Dynamically finds the peak (bulk shift drop) for each measurement, 
-       skips the immediate drop, and fits a clean window of the tail.
+    Uses calculated baseline flags to dynamically define fitting windows:
+    1. Association: From injection start to the absolute peak.
+    2. Dissociation: From the pre-drop peak to the start of the subsequent baseline window.
 
     Args:
         files (dict): Processed sensorgram and flag data files.
-        assoc_duration (float): Seconds to fit for association (cuts off plateau).
-        bulk_shift_skip (float): Seconds to wait AFTER the peak drop before starting the fit.
-        dissoc_duration (float): How many seconds of pure dissociation tail to fit.
 
     Returns:
         dict: The updated kinetics results.
@@ -2368,6 +2353,9 @@ def run_binding_kinetics_analysis(files, assoc_duration=68.0, bulk_shift_skip=5.
                 flags = files[folder][previous_file].sort_values('time').reset_index(drop=True)
                 sensor['response'] = sensor['channel1']
 
+                # Gets the corresponding baseline flags to extract dynamic timings
+                file_name_flags = file.split('_')[1] + '_baseline_flags'
+                baseline_flags = files[folder].get(file_name_flags)
                 parsed = []
 
                 # Loops through each row in the flags dataframe to extract concentrations
@@ -2379,55 +2367,45 @@ def run_binding_kinetics_analysis(files, assoc_duration=68.0, bulk_shift_skip=5.
                         parsed.append({'time': row['time'], 'conc': conc_val, 'label': str(row['conc'])})
 
                 segments = []
-                median_time_step = sensor['time'].diff().median()
-                lookahead_rows = max(1, int(5 / median_time_step))
-                
-                # Loops through each parsed event to delineate segments
-                for i, event in enumerate(parsed):
 
-                    t_start = event['time']
-                    t_next = parsed[i+1]['time'] if i + 1 < len(parsed) else sensor['time'].max()
+                # Ensures baseline flags are available before attempting to extract timings
+                if baseline_flags is not None:
 
-                    # Isolates the sensorgram zone for the current event
-                    zone = sensor[(sensor['time'] >= t_start) & (sensor['time'] <= t_next)]
-                    
-                    # Skips segment if there are insufficient data points
-                    if len(zone) < lookahead_rows + 5: 
-                        continue
+                    # Loops through each parsed event to delineate segments
+                    for i, event in enumerate(parsed):
+
+                        t_start = event['time']
+                        t_next = parsed[i+1]['time'] if i + 1 < len(parsed) else sensor['time'].max()
+
+                        # Matches the event window to the calculated baseline flag timings
+                        valid_flags = baseline_flags[(baseline_flags['absolute_peak_time'] >= t_start) & (baseline_flags['absolute_peak_time'] <= t_next)]
                         
-                    # Calculates the drop size to identify the peak
-                    drop_size = zone['response'] - zone['response'].shift(-lookahead_rows)
-
-                    # Falls back to an immediate shift if the initial drop size is empty
-                    if drop_size.dropna().empty:
-                        drop_size = zone['response'] - zone['response'].shift(-1)
-                    
-                    # Identifies the index of the maximum drop size
-                    peak_idx = drop_size.idxmax()
-
-                    # Defaults to the absolute maximum peak if the delta check yields NaN
-                    if pd.isna(peak_idx):
-                        peak_idx = zone['response'].idxmax()
+                        if valid_flags.empty:
+                            continue
+                            
+                        flag_row = valid_flags.iloc[0]
                         
-                    t_peak = sensor.loc[peak_idx, 'time']
-                    
-                    # Sets association start and end time window
-                    t_assoc_start = t_start
-                    t_assoc_end = t_start + assoc_duration 
-                    
-                    # Sets disociation start and end time window
-                    t_dissoc_start = t_peak + bulk_shift_skip
-                    t_dissoc_end = t_dissoc_start + dissoc_duration
+                        # Sets association start and end time window
+                        t_assoc_start = t_start
+                        t_assoc_end = flag_row['absolute_peak_time']
+                        
+                        # Sets disociation start and end time window
+                        t_dissoc_start = flag_row['peak_time']
+                        t_dissoc_end = flag_row['Window_Start']
 
-                    # Appends the calculated segment boundaries
-                    segments.append({
-                        'conc': event['conc'], 
-                        'meas_id': event['label'], 
-                        't_assoc_start': t_assoc_start,
-                        't_assoc_end': t_assoc_end,
-                        't_dissoc_start': t_dissoc_start,
-                        't_dissoc_end': t_dissoc_end
-                    })
+                        # Skips the segment if any required timings evaluated to NaN
+                        if pd.isna(t_assoc_end) or pd.isna(t_dissoc_start) or pd.isna(t_dissoc_end):
+                            continue
+
+                        # Appends the calculated segment boundaries
+                        segments.append({
+                            'conc': event['conc'], 
+                            'meas_id': event['label'], 
+                            't_assoc_start': t_assoc_start,
+                            't_assoc_end': t_assoc_end,
+                            't_dissoc_start': t_dissoc_start,
+                            't_dissoc_end': t_dissoc_end
+                        })
 
                 fits = []
 
@@ -2490,6 +2468,7 @@ def run_binding_kinetics_analysis(files, assoc_duration=68.0, bulk_shift_skip=5.
                 
     # Checks if valid data was found across the analysis
     if all_global_data:
+        
         print(f"\n{'='*40}\nOverall Kinetics Distributions\n{'='*40}")
             
         # Plots the Per-Concentration rate distributions (multiple values per chip grouped by conc)
