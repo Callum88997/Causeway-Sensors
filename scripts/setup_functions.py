@@ -3070,6 +3070,7 @@ def calculate_pre_drop_peak(file_data, zone, absolute_peak_idx, global_drop_size
     pre_drop_row = file_data.loc[pre_drop_idx]
     
     return pre_drop_idx, pre_drop_row['channel1'], pre_drop_row['channel2'], pre_drop_row['time']
+
 def calculate_baseline(file_data, zone, pre_drop_idx, total_block_rows, tail_sample_offset, lookahead_rows):
     '''Calculates baseline coordinates and averages anchored to the pre-drop peak.
     
