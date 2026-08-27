@@ -2048,64 +2048,86 @@ def calculate_pre_drop_peak(file_data, zone, absolute_peak_idx, global_drop_size
 """
 
 def calculate_baselines(file_data, zone, pre_drop_idx, median_time_step):
-    '''Calculates baselines dynamically by mapping the flat regions between steep edges.'''
+    '''Calculates Baseline 1 and 2, utilizing robust variance filtering to absolutely prevent slope clipping.'''
     
     baselines = []
     
-    # Isolate data from the pre-drop peak onwards
-    zone_data = file_data.loc[pre_drop_idx : zone.index.max()].copy()
+    t_pre_drop = file_data.loc[pre_drop_idx, 'time']
+    t_zone_end = zone['time'].max()
+    
+    # Establish a hard boundary halfway between the pre-drop peak and the next flag
+    t_search_limit = t_pre_drop + (t_zone_end - t_pre_drop) / 2.0
+    
+    # --- BASELINE 1 (-1) STRICT 30-SECOND LOGIC WITH DYNAMIC SHIFT (UNTOUCHED) ---
+    
+    t_b1_limit = min(t_search_limit, t_pre_drop + 30.0)
+    
+    # Isolate data strictly within this restricted first-half window
+    zone_data = file_data[(file_data['time'] >= t_pre_drop) & (file_data['time'] <= t_search_limit)].copy()
     
     if zone_data.empty:
         return baselines
         
-    t_start = file_data.loc[pre_drop_idx, 'time']
+    t_min_search_start = t_pre_drop + 10.0
+    t_min_search_end = min(t_b1_limit, t_pre_drop + 25.0) 
     
-    # Locate the trough (the bottom of the initial wash drop)
-    search_end = min(zone['time'].max(), t_start + 45.0)
-    trough_zone = zone_data[zone_data['time'] <= search_end]
+    min_search_zone = file_data[(file_data['time'] >= t_min_search_start) & (file_data['time'] <= t_min_search_end)]
     
-    if not trough_zone.empty:
-        trough_idx = trough_zone['channel1'].idxmin()
-        t_trough = file_data.loc[trough_idx, 'time']
+    if not min_search_zone.empty:
+        min_idx = min_search_zone['channel1'].idxmin()
+        t_min = file_data.loc[min_idx, 'time']
     else:
-        t_trough = t_start
+        t_min = t_pre_drop + 15.0
         
-    # Calculate the rate of change over ~2s to find steep edges vs flats
-    step = max(1, int(2.0 / median_time_step))
-    zone_data['delta'] = zone_data['channel1'].diff(step)
+    max_search_zone = file_data[(file_data['time'] >= t_min + 2.0) & (file_data['time'] <= t_b1_limit)]
     
-    # Define a dynamic threshold to separate vertical walls from horizontal flats
-    delta_std = zone_data['delta'].std()
-    edge_threshold = max(0.5, delta_std * 0.3) 
-    
-    # Boolean mask: True if it's a steep edge, False if it's a stable flat
-    is_edge = zone_data['delta'].abs() > edge_threshold
-    is_flat = ~is_edge
-    
-    # Group continuous blocks of flatness
-    flat_groups = (is_flat != is_flat.shift()).cumsum()
-    min_flat_rows = int(5.0 / median_time_step)
-    
-    valid_flats = []
-    for g in flat_groups[is_flat].unique():
-        group_data = zone_data[flat_groups == g]
-        if len(group_data) >= min_flat_rows:
-            valid_flats.append({
-                'start_time': group_data['time'].min(),
-                'end_time': group_data['time'].max(),
-                'mid_time': group_data['time'].median()
-            })
+    if len(max_search_zone) > 5:
+        rolling_win_5s = max(1, int(5.0 / median_time_step))
+        
+        roll_mean = max_search_zone['channel1'].rolling(window=rolling_win_5s, center=True, min_periods=1).mean()
+        roll_std = max_search_zone['channel1'].rolling(window=rolling_win_5s, center=True, min_periods=1).std()
+        
+        median_std = roll_std.median()
+        flat_candidates = roll_mean[roll_std <= median_std]
+        
+        if not flat_candidates.empty:
+            best_idx = flat_candidates.idxmax()
+        else:
+            best_idx = roll_mean.idxmax()
             
-    # Filter to only keep flats that occur AFTER the initial drop/trough
-    post_trough_flats = [f for f in valid_flats if f['end_time'] > t_trough]
-    
-    # --- BASELINE 1 (-1) ---
-    if len(post_trough_flats) >= 1:
-        # The first stable flat after the initial wash drop
-        # Midpoint safely centers it between the recovery rise and the next event (e.g. regen pulse)
-        t_base1 = post_trough_flats[0]['mid_time']
+        t_base1 = file_data.loc[best_idx, 'time']
     else:
-        t_base1 = t_trough + 15.0 # Safe fallback
+        t_base1 = t_min + 5.0
+        
+    # Prepare the derivative data to check for slope clipping
+    smooth_win = max(1, int(2.0 / median_time_step))
+    smoothed_signal = zone_data['channel1'].rolling(window=smooth_win, center=True, min_periods=1).mean()
+    step = max(1, int(2.0 / median_time_step))
+    zone_data['delta'] = smoothed_signal.diff(step)
+    
+    b1_zone = zone_data[zone_data['time'] <= t_b1_limit]
+    b1_edge_threshold = max(0.5, b1_zone['delta'].std() * 0.3)
+    
+    # Nudge the 5s window away from the edges if it clips a slope
+    for _ in range(4): # Allow up to 4 shifts
+        t_start_check = t_base1 - 2.5
+        t_end_check = t_base1 + 2.5
+        check_zone = zone_data[(zone_data['time'] >= t_start_check) & (zone_data['time'] <= t_end_check)]
+        
+        if check_zone.empty:
+            break
+            
+        # If clipping the drop on the right (steep decrease), shift Left by 1s
+        if check_zone['delta'].min() < -b1_edge_threshold:
+            t_base1 -= 1.0
+        # If clipping the rise on the left (steep increase), shift Right by 1s
+        elif check_zone['delta'].max() > b1_edge_threshold:
+            t_base1 += 1.0
+        else:
+            break # Window is entirely stable and flat
+            
+    # Failsafe: Force the baseline to remain safely inside the 30s boundary
+    t_base1 = min(t_base1, t_b1_limit - 2.5)
         
     t_start_win1 = t_base1 - 2.5
     t_end_win1 = t_base1 + 2.5
@@ -2114,21 +2136,56 @@ def calculate_baselines(file_data, zone, pre_drop_idx, median_time_step):
     ch1_avg1 = win_zone1['channel1'].mean() if not win_zone1.empty else file_data.loc[pre_drop_idx, 'channel1']
     ch2_avg1 = win_zone1['channel2'].mean() if not win_zone1.empty else file_data.loc[pre_drop_idx, 'channel2']
     
-    baselines.append((t_start_win1, t_end_win1, ch1_avg1, ch2_avg1, '-1'))
+    baselines.append((t_start_win1, t_end_win1, ch1_avg1, ch2_avg1, '- 1'))
     
-    # --- BASELINE 2 (-2) ---
-    if len(post_trough_flats) >= 2:
-        # The absolute last stable flat before the interval ends
-        # Midpoint aligns it on the short flat before the next cycle
-        t_base2 = post_trough_flats[-1]['mid_time']
-    elif len(post_trough_flats) == 1:
-        # If there is no regen pulse and only one massive flat exists, place B2 at the end of it
-        t_base2 = max(t_base1 + 10.0, post_trough_flats[0]['end_time'] - 5.0)
-    else:
-        t_base2 = zone['time'].max() - 5.0 # Safe fallback
+    # --- BASELINE 2 (-2) NOISE-AWARE VARIANCE FILTERING ---
+    
+    # Define the isolated search area for B2: Safely after B1, up to the halfway limit
+    t_b2_search_start = t_base1 + 15.0
+    t_b2_search_end = t_search_limit
+    
+    b2_zone = zone_data[(zone_data['time'] >= t_b2_search_start) & (zone_data['time'] <= t_b2_search_end)]
+    
+    if len(b2_zone) > 5:
+        # Match the rolling window to the exact 5-second output width
+        rolling_win_5s = max(1, int(5.0 / median_time_step))
+        b2_roll_std = b2_zone['channel1'].rolling(window=rolling_win_5s, center=True, min_periods=1).std()
         
-    # Ensure Baseline 2 doesn't accidentally overlap Baseline 1 in extremely short cycles
-    t_base2 = max(t_base2, t_base1 + 10.0)
+        # Calculate a dynamic noise threshold strictly for this late zone
+        b2_median_std = b2_roll_std.median()
+        
+        # Boolean mask: True only if the 5s window is exceptionally flat (rejects slopes)
+        is_b2_flat = b2_roll_std <= b2_median_std
+        
+        # Group the contiguous flat regions
+        b2_flat_groups = (is_b2_flat != is_b2_flat.shift()).cumsum()
+        
+        valid_b2_flats = []
+        min_flat_rows = int(3.5 / median_time_step)
+        
+        for g in b2_flat_groups[is_b2_flat].unique():
+            group_data = b2_zone[b2_flat_groups == g]
+            if len(group_data) >= min_flat_rows:
+                valid_b2_flats.append(group_data)
+                
+        if len(valid_b2_flats) >= 1:
+            # Grab the LAST stable flat region before the interval cuts off
+            last_b2_flat = valid_b2_flats[-1]
+            
+            # Within this last plateau, locate the absolute lowest variance 
+            # to guarantee the 5s window avoids both the left and right slopes
+            best_idx_b2 = b2_roll_std.loc[last_b2_flat.index].idxmin()
+            t_base2 = file_data.loc[best_idx_b2, 'time']
+        else:
+            # Fallback to the flattest single point in the entire B2 search zone
+            best_idx_b2 = b2_roll_std.idxmin()
+            t_base2 = file_data.loc[best_idx_b2, 'time'] if pd.notna(best_idx_b2) else t_b2_search_end - 5.0
+    else:
+        t_base2 = t_search_limit - 5.0
+        
+    # Ensure Baseline 2 doesn't accidentally overlap B1 or exceed the search limit
+    t_base2 = max(t_base2, t_base1 + 15.0)
+    t_base2 = min(t_base2, t_search_limit - 2.5)
     
     t_start_win2 = t_base2 - 2.5
     t_end_win2 = t_base2 + 2.5
@@ -2137,7 +2194,7 @@ def calculate_baselines(file_data, zone, pre_drop_idx, median_time_step):
     ch1_avg2 = win_zone2['channel1'].mean() if not win_zone2.empty else file_data.loc[pre_drop_idx, 'channel1']
     ch2_avg2 = win_zone2['channel2'].mean() if not win_zone2.empty else file_data.loc[pre_drop_idx, 'channel2']
     
-    baselines.append((t_start_win2, t_end_win2, ch1_avg2, ch2_avg2, '-2'))
+    baselines.append((t_start_win2, t_end_win2, ch1_avg2, ch2_avg2, '- 2'))
     
     return baselines
 
@@ -2435,7 +2492,7 @@ def calculate_and_plot_shift(shift_data, title):
     '''
 
     # Creates a copy of the shift data to preserve the original data
-    shift_data = shift_data.copy()
+    shift_data = shift_data[~shift_data['information'].astype(str).str.contains('-1')].reset_index(drop=True)
     initial_baseline = shift_data['ch1_avg'].iloc[0]
 
     # Calculates absolute baseline shifts and percentage of peak response
@@ -2484,74 +2541,3 @@ def calculate_and_plot_shift(shift_data, title):
 
     # Display the summary table
     display(summary_table)
-
-def analyse_standard_curves_extra(files, save_dir='Standard Curve Files'):
-    '''Iterates over the processed files dictionary, generating and displaying all requested outputs neatly inside collapsible UI widgets.
-
-    Args:
-        files (dict): Processed dictionary containing standard curve data.
-        save_dir (str): Directory where standard curve files are stored.
-
-    Returns:
-        dict: The updated files dictionary.
-    '''
-
-    files = calculate_sc_flags(files, save_dir)
-
-    # Loops through each folder in the files dictionary
-    for folder in files.keys():
-
-        print(f'\nEvaluating Folder: {folder}')
-        
-        previous_file = ''
-
-        # Loops through each file in the folder
-        for file in list(files[folder].keys()):
-
-            # Cleans the filename and extracts chip and measurement IDs
-            clean_filename = file.replace('Copy of ', '').strip()
-            parts = clean_filename.split('_')
-            chip_id = parts[0] if len(parts) > 0 else 'Unknown'
-            measurement_id = parts[1] if len(parts) > 1 else 'Unknown'
-
-            if 'sensorgram' in file:
-
-                print(f'\n--- Chip ID: {chip_id} | Measurement ID: {measurement_id} ---')
-
-                file_data = files[folder][file]
-                previous_file_data = files[folder].get(previous_file, None)
-
-                # Display the basic sensorgram plot
-                with collapsible_output(f'Basic Sensorgram: {file}'):
-                    plot_sensorgrams({file: file_data}, 'Standard Curve')
-                
-                # Checks whether the dataframe contains data
-                if previous_file_data is not None and not previous_file_data.empty:
-                    
-                    with collapsible_output(f'Sensorgram with Flags: {file}'):
-
-                        times = previous_file_data['time'].tolist()
-                        labels = previous_file_data['conc'].tolist()
-                        title = f'Standard Curve Sensorgram for {file}'
-                        colours = ['tab:blue'] * len(times)
-                        
-                        # Display the flags on the sensorgram
-                        plot_flags_on_sensorgrams(file_data, times, labels, title, colours)
-
-                file_name_flags = file.split('_')[1] + '_baseline_flags'
-
-                if file_name_flags in files[folder]:
-
-                    baseline_flags = files[folder][file_name_flags]
-
-                    # Display the baselines and peaks plot
-                    with collapsible_output(f'Baseline & Peak Tail-Sampling: {file}'):
-                        plot_baselines_and_peaks(file_data, previous_file_data, baseline_flags, f'Tail-Sampling Window Method with Peaks - {file}')
-
-                    # Display the calculated baseline shift plots
-                    with collapsible_output(f'Baseline Shift Analysis: {file}'):
-                        calculate_and_plot_shift(baseline_flags, file)
-
-            previous_file = file
-
-    return files
