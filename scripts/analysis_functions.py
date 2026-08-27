@@ -18,43 +18,7 @@ from scipy.stats import linregress
 
 from scripts.setup_functions import collapsible_output
 
-"""def detect_anomalies(df, feature_cols, contamination='auto'): # 0.07
-    '''Applies an Isolation Forest to detect multivariate outliers.
-
-    Args:
-        df (pd.DataFrame): The dataframe to analyse.
-        feature_cols (list[str]): The list of feature columns to evaluate.
-        contamination (str | float, optional): The proportion of outliers in the data. Defaults to 'auto'.
-
-    Returns:
-        pd.DataFrame: The dataframe with 'anomaly' (-1 for outlier, 1 for inlier) and 'anomaly_score' columns.
-    '''
-
-    # Creates a copy of the clean dataframe to preserve the original data
-    df_clean = df.dropna(subset=feature_cols).copy()
-    
-    # Checks whether the dataframe contains data
-    if df_clean.empty or len(df_clean) < 2:
-
-        df_clean['anomaly'] = 1
-        df_clean['anomaly_score'] = 0.0
-
-        return df_clean
-    
-    # Initialises the scaler and standardises the features
-    scaler = RobustScaler()
-    X_scaled = scaler.fit_transform(df_clean[feature_cols])
-    
-    # Initialises and fits the Isolation Forest model
-    iso = IsolationForest(n_estimators=500, contamination=contamination, random_state=8030)
-
-    df_clean['anomaly'] = iso.fit_predict(X_scaled)
-    df_clean['anomaly_score'] = iso.decision_function(X_scaled)
-    
-    return df_clean
-"""
-
-def detect_anomalies(df, feature_cols, stages=None, contamination=0.5):
+def detect_anomalies(df, feature_cols, contamination=0.005):
     '''Applies an Isolation Forest to detect multivariate outliers robustly.
     Evaluates each inferred stage independently to prevent score dilution.
     If a chip is anomalous in ANY single stage, it is flagged as an outlier.
@@ -69,6 +33,15 @@ def detect_anomalies(df, feature_cols, stages=None, contamination=0.5):
     '''
 
     df_clean = df.copy()
+
+    target = 'B72604R8035' 
+    if target in df_clean.index: # If 065 is a chip_id (index after pivot)
+        print(f"DEBUG: Chip {target} entered anomaly detection with shape {df_clean.loc[[target]].shape}")
+
+        display(df_clean)
+
+    elif any(target in str(col) for col in df_clean.columns): # If 065 is a stage (column after pivot)
+        print(f"DEBUG: Stage {target} is present in columns. NaNs in stage: {df_clean.filter(like=target).isna().sum().sum()}")
 
     # Initialise trackers for all chips
     worst_scores = pd.Series(index=df_clean.index, data=np.inf)
@@ -240,7 +213,7 @@ def analyse_anomaly_drivers(df, anomalies_df, label, num=3):
         anom_val = anomaly_mean[stage]
         print(f'  - {stage}: Anomaly Avg = {anom_val:.3f} | Normal Avg = {norm_val:.3f} (Z-Score: {z:.2f})')
 
-def create_wide_intra(intra_df, val_col, keep_metrics=['slope']):
+def create_wide_intra(intra_df, val_col, keep_metrics=['std', 'slope', 'range', 'skew']):
     '''Pivots multiple intra-stage metrics and suffixes columns to prevent overlap.
     Dynamically identifies all metric columns belonging to the target channel.
 
@@ -1616,7 +1589,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
             print(f'Total Unique Immobilisation Fails: {len(immob_unique)}')
             print(f'Total Unique Standard Curve Fails: {len(sc_fails)}')
 
-            print(f'Total Unique Incomplete Chips: {len(incomplete_chips)}')
+            print(f'Total Unique Chips with Incomplete Datasets: {len(incomplete_chips)}')
             
             if incomplete_chips:
                 print(f"  - Incomplete Chip IDs: {', '.join(map(str, sorted(list(incomplete_chips))))}")
@@ -1674,11 +1647,18 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
             return
 
         features = master_df.columns.tolist()
-        X_master = RobustScaler().fit_transform(master_df[features])
+
+        valid_rows = master_df[features].notna().all(axis=1)
+        master_df['Cluster'] = pd.NA
+
+        if valid_rows.sum() >= 2:
+
+            X_master = RobustScaler().fit_transform(master_df.loc[valid_rows, features])
         
-        # Re-clusters the master dataset for contextual grouping
-        kmeans = KMeans(n_clusters=2, random_state=8030, n_init=10)
-        master_df['Cluster'] = kmeans.fit_predict(X_master)
+            # Re-clusters the master dataset for contextual grouping
+            kmeans = KMeans(n_clusters=2, random_state=8030, n_init=10)
+
+            master_df.loc[valid_rows, 'Cluster'] = kmeans.fit_predict(X_master)
 
         # Attempts to resolve datetime columns from the raw records
         date_col = next((c for c in sc_raw_df.columns if 'date' in c.lower()), None)
@@ -1700,15 +1680,21 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
             # Identifies the assigned cluster for the current chip
             if chip in master_df.index.get_level_values(master_df.index.name or 'chip_id'):
                 
-                # Check if it's a MultiIndex (e.g., chip_id + channel)
+                # Check if it's a MultiIndex (e.g. chip_id + channel)
                 if isinstance(master_df.index, pd.MultiIndex):
                     chip_clusters = master_df.xs(chip, level='chip_id')['Cluster'].to_dict()
-                    cluster_profile = ' | '.join([f'{ch}: Cluster {cl}' for ch, cl in chip_clusters.items()])
+
+                    # Handle NaNs in the dictionary
+                    cluster_profile = ' | '.join([f"{ch}: {'N/A' if pd.isna(cl) else f'Cluster {int(cl)}'}" for ch, cl in chip_clusters.items()])
                 
                 # If it's a flat index (just chip_id)
                 else:
                     cl = master_df.loc[chip, 'Cluster']
-                    cluster_profile = f'Cluster {cl}'
+
+                    if pd.isna(cl):
+                        cluster_profile = 'N/A (Incomplete Stage Data)'
+                    else:
+                        cluster_profile = f'Cluster {int(cl)}'
                     
             else:
                 cluster_profile = 'N/A (Incomplete Stage Data)'

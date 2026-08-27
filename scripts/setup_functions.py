@@ -11,7 +11,7 @@ import plotly.figure_factory as ff
 from scipy.optimize import curve_fit
 from IPython.display import display, HTML
 import ipywidgets as widgets
-from scipy.stats import skew, kurtosis
+from scipy.stats import skew
 
 # Data Quality and Visualisation
 def check_data_quality(dfs_dict, stage_name):
@@ -519,6 +519,98 @@ def calculate_baseline_peaks(time, reagent_flags):
                     
     return baseline_records
 
+"""def update_immob_flags(flag_df, plot_data, file_path=None):
+    '''Calculates and updates buffer, peak, baseline, and flat flags for a single sensorgram.
+
+    Args:
+        flag_df (pd.DataFrame): Flag dataframe for a single run.
+        plot_data (pd.DataFrame): Sensorgram dataframe containing 'time' and channel columns.
+        file_path (str, optional): Output CSV path to write the updated flags. Defaults to None.
+
+    Returns:
+        pd.DataFrame: Updated flag dataframe.
+    '''
+
+    # Creates a copy of the flag data to preserve original data
+    flag_data = flag_df.copy()
+
+    # Skips calculation if an initial flag already exists in the dataframe
+    if flag_data['information'].astype(str).str.contains('initial', case=False, na=False).any():
+        return flag_data
+
+    time_array = plot_data['time'].sort_values().values
+    signal = plot_data['channel1'].values
+    
+    start_time = time_array[0]
+    finish_time = time_array.max()
+
+    # Filters flags occurring within the valid sensorgram time range
+    flag_data = flag_data[flag_data['time'] <= finish_time].copy()
+    parsed_flags_df = extract_flags_from_pushes(flag_data)
+    has_buffer_3_plateau = 'Buffer 3 - Plateau' in parsed_flags_df['information'].values
+
+    time_delta = time_array[:-1]
+    delta = np.diff(signal)
+    initial_records = []
+    final_records = []
+
+    is_buffer_1 = parsed_flags_df['information'].str.startswith('Buffer 1', na=False)
+    not_plateau = ~parsed_flags_df['information'].str.endswith('Plateau', na=False)
+
+    b1_flags = parsed_flags_df[is_buffer_1 & not_plateau]
+    
+    # Calculates the initial flat region prior to Buffer 1
+    if not b1_flags.empty:
+        b1_time = b1_flags['time'].iloc[0]
+        b1_idx = np.abs(time_array - b1_time).argmin()
+        
+        initial_offset = (time_array[b1_idx] - start_time) * 0.75
+        initial_idx = np.where((time_delta > (start_time + initial_offset)) & (time_delta < time_array[b1_idx]))[0]
+
+        if initial_idx.size > 0:
+            flat_idx = initial_idx[np.argmin(np.abs(delta[initial_idx]))]
+            initial_records.append({'time': time_array[flat_idx], 'information': 'Initial'})
+    
+    # Calculates the final flat region after Buffer 3 Plateau
+    if has_buffer_3_plateau:
+        b3p_flags = parsed_flags_df[parsed_flags_df['information'] == 'Buffer 3 - Plateau']
+
+        if not b3p_flags.empty:
+            b3p_time = b3p_flags['time'].iloc[0]
+            b3p_idx = np.abs(time_array - b3p_time).argmin()
+            
+            final_offset = (finish_time - time_array[b3p_idx]) * 0.75
+            final_idx = np.where((time_delta > (time_array[b3p_idx] + final_offset)) & (time_delta < finish_time))[0]
+
+            if final_idx.size > 0:
+                flat_idx = final_idx[np.argmin(np.abs(delta[final_idx]))]
+                final_records.append({'time': time_array[flat_idx], 'information': 'Final'})
+            else:
+                final_records.append({'time': time_array[max(0, len(time_array) - 40)], 'information': 'Final'})
+                
+    boundary_list = [{'time': start_time, 'information': 'Start'}]
+
+    if has_buffer_3_plateau:
+        boundary_list.append({'time': finish_time, 'information': 'Finish'})
+        
+    boundary_records = pd.DataFrame(boundary_list)
+    all_new_records = pd.concat([boundary_records, parsed_flags_df, pd.DataFrame(initial_records + final_records)], ignore_index=True)
+    updated_df = all_new_records.sort_values('time').reset_index(drop=True)
+
+    baseline_flags = updated_df[~updated_df['information'].str.contains('Concentration|Flat|Start|Finish', na=False)]
+    baseline_list = calculate_baseline_peaks(time_array, baseline_flags)
+    
+    updated_df = pd.concat([updated_df, pd.DataFrame(baseline_list)], ignore_index=True)
+    updated_df = updated_df.drop_duplicates(subset=['time', 'information'], keep='first').sort_values('time').reset_index(drop=True)
+    
+    # Saves to disk if a file path is provided
+    if file_path:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        updated_df.to_csv(file_path, index=False)
+        
+    return updated_df
+"""
+
 def update_immob_flags(flag_df, plot_data, file_path=None):
     '''Calculates and updates buffer, peak, baseline, and flat flags for a single sensorgram.
 
@@ -547,6 +639,17 @@ def update_immob_flags(flag_df, plot_data, file_path=None):
     # Filters flags occurring within the valid sensorgram time range
     flag_data = flag_data[flag_data['time'] <= finish_time].copy()
     parsed_flags_df = extract_flags_from_pushes(flag_data)
+
+    # Ensures the last recorded injection has a corresponding Plateau flag
+    if not parsed_flags_df.empty:
+
+        last_flag = parsed_flags_df.iloc[-1]['information']
+
+        if not str(last_flag).endswith('Plateau'):
+
+            missing_plateau = f"{last_flag} - Plateau"
+            parsed_flags_df = pd.concat([parsed_flags_df, pd.DataFrame([{'time': finish_time, 'information': missing_plateau}])], ignore_index=True)
+
     has_buffer_3_plateau = 'Buffer 3 - Plateau' in parsed_flags_df['information'].values
 
     time_delta = time_array[:-1]
@@ -948,11 +1051,7 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
             signal = stage_data[ch].values
 
             if len(signal) > 1:
-                row_features[f'{ch}_mean'] = np.mean(signal)
-                row_features[f'{ch}_median'] = np.median(signal)
                 row_features[f'{ch}_std'] = np.std(signal)
-                row_features[f'{ch}_min'] = np.min(signal)
-                row_features[f'{ch}_max'] = np.max(signal)
                 row_features[f'{ch}_range'] = np.ptp(signal)
                 
                 # Calculate linear slope
@@ -963,39 +1062,27 @@ def extract_intrastage_features(sens_df, event_df, channels, chip_id):
                 # Shape statistics 
                 if np.std(signal) < 1e-8:
                     row_features[f'{ch}_skew'] = 0.0
-                    row_features[f'{ch}_kurtosis'] = 0.0
                 else:
                     row_features[f'{ch}_skew'] = skew(signal)
-                    row_features[f'{ch}_kurtosis'] = kurtosis(signal)
                 
             elif len(signal) == 1:
 
                 # Fallback if only 1 data point is captured
                 val = signal[0]
                 row_features.update({
-                    f'{ch}_mean': val, 
-                    f'{ch}_median': val, 
                     f'{ch}_std': 0,
-                    f'{ch}_min': val, 
-                    f'{ch}_max': val, 
                     f'{ch}_range': 0,
                     f'{ch}_slope': 0, 
-                    f'{ch}_skew': 0, 
-                    f'{ch}_kurtosis': 0
+                    f'{ch}_skew': 0
                 })
             else:
 
                 # Fallback if 0 data points are captured
                 row_features.update({
-                    f'{ch}_mean': 0,
-                    f'{ch}_median': 0, 
                     f'{ch}_std': 0,
-                    f'{ch}_min': 0, 
-                    f'{ch}_max': 0, 
                     f'{ch}_range': 0,
                     f'{ch}_slope': 0, 
-                    f'{ch}_skew': 0, 
-                    f'{ch}_kurtosis': 0
+                    f'{ch}_skew': 0
                 })
                 
         features_list.append(row_features)
@@ -1435,21 +1522,6 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
     with sensor_output:
         plot_sensorgrams(immobilisation_dfs, 'Immobilisation')
 
-    # Initialises the flag calculations collapsible output widget
-    '''calc_output = collapsible_output('Flag Calculations')
-
-    with calc_output:
-
-        print('Calculating and updating buffer, plateau, and baseline flags...')
-        
-        # Calculates and updates buffer, plateau, and baseline flags
-        flags_dfs = update_immob_flags(immob_df, immobilisation_dfs, flags_dfs)
-
-        print('Calculating 5-second averages...')
-
-        # Calculates five-second averages for the detected flags
-        averaged_flags_dfs = calculate_5s_averages(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_dfs)'''
-
     # Declares channel-order variables for the comparison results
     all_events_imp, all_changes_imp, all_intra_imp = [], [], []
     all_events_comb, all_changes_comb, all_intra_comb = [], [], []
@@ -1860,1141 +1932,6 @@ def run_standard_curve_analysis(standard_curves_df):
     return clean_data_points_SC, sc_collected_df
 
 # SC extra data
-"""def calculate_sc_flags(files, save_dir='Standard Curve Files'):
-    '''Calculates dynamic baseline and peak flags from sensorgram data, saves them to a CSV, updates the dictionary, and optionally plots the results.
-
-    Args:
-        files (dict): Dictionary holding the parsed file data.
-        save_dir (str): Root directory where the CSV files should be saved.
-
-    Returns:
-        dict: The updated files dictionary containing the new baseline flag dataframes.
-    '''
-
-    # Loops through each folder in the files dictionary
-    for folder in files.keys():
-        previous_file = ''
-
-        # Skips the folder if baseline flags are already present
-        if any('baseline' in key for key in files[folder].keys()):
-            continue
-
-        # Loops through each file in the current folder
-        for file in list(files[folder].keys()):
-
-            if 'sensorgram' in file:
-
-                file_data = files[folder][file].sort_values('time').reset_index(drop=True)
-                previous_file_data = files[folder][previous_file].sort_values('time').reset_index(drop=True)
-
-                # Calculates the median time step to define window row counts
-                median_time_step = file_data['time'].diff().median()
-                lookahead_rows = max(1, int(5 / median_time_step))
-                
-                total_block_rows = int(30 / median_time_step) 
-                tail_sample_offset = int(5 / median_time_step)
-                
-                intervals = []
-
-                # Loops through each previous file data index to extract interval times and measurements
-                for i in range(len(previous_file_data) - 1):
-
-                    t_start = previous_file_data.iloc[i]['time']
-                    t_end = previous_file_data.iloc[i+1]['time']
-                    meas_1 = str(previous_file_data.iloc[i]['conc']).split('-')[0]
-                    meas_2 = str(previous_file_data.iloc[i+1]['conc']).split('-')[0]
-                    intervals.append((t_start, t_end, meas_1, meas_2))
-                    
-                last_meas = str(previous_file_data.iloc[-1]['conc']).split('-')[0]
-                intervals.append((previous_file_data.iloc[-1]['time'], file_data['time'].max(), last_meas, 'Final'))
-                    
-                saved_file_rows = []
-                
-                t_absolute_first = file_data['time'].min()
-                t_start_init = t_absolute_first
-                t_end_init = t_absolute_first + 5.0
-                
-                # Isolates the initial baseline zone at the absolute start of the recording
-                init_zone = file_data[(file_data['time'] >= t_start_init) & (file_data['time'] <= t_end_init)]
-
-                # Checks whether the dataframe contains data
-                if not init_zone.empty:
-
-                    saved_file_rows.append({
-                        'Window_Start': t_start_init,
-                        'Window_End': t_end_init,
-                        'information': 'Initial Baseline',
-                        'ch1_avg': init_zone['channel1'].mean(),
-                        'ch2_avg': init_zone['channel2'].mean(),
-                        'ch1_peak': np.nan,
-                        'ch2_peak': np.nan,
-                        'peak_time': np.nan
-                    })
-    
-                # Loops through each enumerated interval
-                for idx, (t_start, t_end, meas_1, meas_2) in enumerate(intervals):
-
-                    zone = file_data[(file_data['time'] >= t_start) & (file_data['time'] <= t_end)]
-
-                    # Checks whether the dataframe contains data
-                    if zone.empty:
-                        continue
-                        
-                    t_mid = t_start + (t_end - t_start) / 2
-
-                    # Bisects the zone to isolate the relevant half based on measurement consistency
-                    sub_zone = zone[zone['time'] >= t_mid] if meas_1 == meas_2 else zone[zone['time'] <= t_mid]
-
-                    # Checks whether the dataframe contains data
-                    if sub_zone.empty:
-                        sub_zone = zone
-    
-                    # Calculates the signal drop size to identify the injection peak
-                    drop_size = sub_zone['channel1'] - sub_zone['channel1'].shift(-lookahead_rows)
-
-                    # Checks whether the dataframe contains data
-                    if drop_size.dropna().empty:
-                        drop_size = sub_zone['channel1'] - sub_zone['channel1'].shift(-1)
-
-                    # Locates the maximum drop index to define the exact peak position
-                    peak_global_idx = drop_size.idxmax()
-                    exact_row = file_data.loc[peak_global_idx]
-
-                    ch1_peak_val = exact_row['channel1']
-                    ch2_peak_val = exact_row['channel2']
-                    peak_time_val = exact_row['time']
-
-                    max_zone_idx = zone.index.max()
-
-                    # Determines the target baseline index by stepping forward, avoiding out-of-bounds errors
-                    target_baseline_idx = peak_global_idx + total_block_rows - tail_sample_offset
-        
-                    if target_baseline_idx > max_zone_idx:
-                        target_baseline_idx = max(peak_global_idx + lookahead_rows, max_zone_idx - tail_sample_offset)
-                    
-                    target_baseline_idx = max(peak_global_idx, min(target_baseline_idx, max_zone_idx))
-                    baseline_row = file_data.loc[target_baseline_idx]
-        
-                    t_base = baseline_row['time']
-                    t_start_win = t_base - 2.5
-                    t_end_win = t_base + 2.5
-                    
-                    # Isolates the five-second window zone centred around the target baseline time
-                    win_zone = file_data[(file_data['time'] >= t_start_win) & (file_data['time'] <= t_end_win)]
-                    
-                    ch1_win_avg = win_zone['channel1'].mean() if not win_zone.empty else baseline_row['channel1']
-                    ch2_win_avg = win_zone['channel2'].mean() if not win_zone.empty else baseline_row['channel2']
-                    
-                    # Stores the calculated baseline and peak metrics into the row collection
-                    saved_file_rows.append({
-                        'Window_Start': t_start_win,
-                        'Window_End': t_end_win,
-                        'information': f'Baseline Window ({meas_1} / {meas_2})',
-                        'ch1_avg': ch1_win_avg,
-                        'ch2_avg': ch2_win_avg,
-                        'ch1_peak': ch1_peak_val,
-                        'ch2_peak': ch2_peak_val,
-                        'peak_time': peak_time_val
-                    })
-                    
-                t_absolute_last = file_data['time'].max()
-                t_start_final = t_absolute_last - 5.0
-                t_end_final = t_absolute_last
-                
-                # Isolates the final baseline zone at the end of the recording and calculates averages
-                final_zone = file_data[(file_data['time'] >= t_start_final) & (file_data['time'] <= t_end_final)]
-        
-                saved_file_rows.append({
-                    'Window_Start': t_start_final,
-                    'Window_End': t_end_final,
-                    'information': 'Final Baseline',
-                    'ch1_avg': final_zone['channel1'].mean(),
-                    'ch2_avg': final_zone['channel2'].mean(),
-                    'ch1_peak': np.nan,
-                    'ch2_peak': np.nan,
-                    'peak_time': np.nan
-                })
-
-                print(f'Calculated flags for {folder}/{file}')
-                flag_df = pd.DataFrame(saved_file_rows)
-                file_name = file.split('_')[1] + '_baseline_flags.csv'
-                file_path = os.path.join(save_dir, str(folder), file_name)
-                
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                
-                # Saves the calculated baseline flags to a new CSV file
-                flag_df.to_csv(file_path, index=False)
-        
-                files[folder][file_name.replace('.csv', '')] = flag_df
-
-            previous_file = file
-
-    return files
-"""
-
-# works but some mistakes
-"""def calculate_sc_flags(files, save_dir='Standard Curve Files'):
-    '''Calculates dynamic baseline and peak flags from sensorgram data, saves them to a CSV, updates the dictionary, and optionally plots the results.
-
-    Args:
-        files (dict): Dictionary holding the parsed file data.
-        save_dir (str): Root directory where the CSV files should be saved.
-
-    Returns:
-        dict: The updated files dictionary containing the new baseline flag dataframes.
-    '''
-
-    # Loops through each folder in the files dictionary
-    for folder in files.keys():
-        previous_file = ''
-
-        # Skips the folder if baseline flags are already present
-        '''if any('baseline' in key for key in files[folder].keys()):
-            continue'''
-
-        # Loops through each file in the current folder
-        for file in list(files[folder].keys()):
-
-            if 'sensorgram' in file:
-
-                file_data = files[folder][file].sort_values('time').reset_index(drop=True)
-                previous_file_data = files[folder][previous_file].sort_values('time').reset_index(drop=True)
-
-                # Calculates the median time step to define window row counts
-                median_time_step = file_data['time'].diff().median()
-                lookahead_rows = max(1, int(5 / median_time_step))
-                
-                total_block_rows = int(30 / median_time_step) 
-                tail_sample_offset = int(5 / median_time_step)
-                
-                intervals = []
-
-                # Loops through each previous file data index to extract interval times and measurements
-                for i in range(len(previous_file_data) - 1):
-
-                    t_start = previous_file_data.iloc[i]['time']
-                    t_end = previous_file_data.iloc[i+1]['time']
-                    meas_1 = str(previous_file_data.iloc[i]['conc']).split('-')[0]
-                    meas_2 = str(previous_file_data.iloc[i+1]['conc']).split('-')[0]
-                    intervals.append((t_start, t_end, meas_1, meas_2))
-                    
-                last_meas = str(previous_file_data.iloc[-1]['conc']).split('-')[0]
-                intervals.append((previous_file_data.iloc[-1]['time'], file_data['time'].max(), last_meas, 'Final'))
-                
-                # Calculates the max cycle duration to protect the final measurement from arbitrary file lengths
-                cycle_lengths = [t_end - t_start for (t_start, t_end, m1, m2) in intervals if m2 != 'Final']
-                max_standard_cycle = max(cycle_lengths) if cycle_lengths else 600.0
-                
-                # =========================================================================
-                # GLOBAL DROP CALCULATION (Spike-Proofed)
-                # =========================================================================
-                # 1. Apply a 1-second rolling median to the entire file to erase negative glitches.
-                median_win = max(1, int(1.0 / median_time_step))
-                spike_proof_signal = file_data['channel1'].rolling(window=median_win, center=True, min_periods=1).median()
-                
-                # 2. Calculate the 2.5s forward drop on the SPIKE-PROOF signal upfront.
-                look_fwd = max(1, int(2.5 / median_time_step))
-                global_drop_size = spike_proof_signal - spike_proof_signal.shift(-look_fwd)
-                    
-                saved_file_rows = []
-                
-                t_absolute_first = file_data['time'].min()
-                t_start_init = t_absolute_first
-                t_end_init = t_absolute_first + 5.0
-                
-                # Isolates the initial baseline zone at the absolute start of the recording
-                init_zone = file_data[(file_data['time'] >= t_start_init) & (file_data['time'] <= t_end_init)]
-
-                # Checks whether the dataframe contains data
-                if not init_zone.empty:
-
-                    saved_file_rows.append({
-                        'Window_Start': t_start_init,
-                        'Window_End': t_end_init,
-                        'information': 'Initial Baseline',
-                        'ch1_avg': init_zone['channel1'].mean(),
-                        'ch2_avg': init_zone['channel2'].mean(),
-                        'ch1_absolute_peak': np.nan,
-                        'ch2_absolute_peak': np.nan,
-                        'absolute_peak_time': np.nan,
-                        'ch1_peak': np.nan,
-                        'ch2_peak': np.nan,
-                        'peak_time': np.nan
-                    })
-    
-                # Loops through each enumerated interval
-                for idx, (t_start, t_end, meas_1, meas_2) in enumerate(intervals):
-
-                    zone = file_data[(file_data['time'] >= t_start) & (file_data['time'] <= t_end)]
-
-                    if zone.empty:
-                        continue
-                        
-                    # Calculate the midpoint of the interval for Step 1
-                    t_mid = t_start + (t_end - t_start) / 2
-
-                    # Strictly isolate the FIRST HALF of the interval
-                    first_half_zone = zone[zone['time'] <= t_mid]
-
-                    if first_half_zone.empty:
-                        first_half_zone = zone
-                        
-                    # =========================================================================
-                    # STEP 1: Find the Absolute Peak (UNTOUCHED)
-                    # =========================================================================
-                    smooth_window_abs = max(1, int(3.0 / median_time_step))
-                    smoothed_first_half = first_half_zone['channel1'].rolling(window=smooth_window_abs, center=True, min_periods=1).mean()
-                    
-                    smoothed_peak_idx = smoothed_first_half.idxmax()
-                    
-                    search_start_abs = max(first_half_zone.index.min(), smoothed_peak_idx - int(1.0 / median_time_step))
-                    search_end_abs = min(first_half_zone.index.max(), smoothed_peak_idx + int(1.0 / median_time_step))
-                    
-                    absolute_peak_idx = first_half_zone.loc[search_start_abs:search_end_abs, 'channel1'].idxmax()
-                    abs_row = file_data.loc[absolute_peak_idx]
-
-                    ch1_abs_val = abs_row['channel1']
-                    ch2_abs_val = abs_row['channel2']
-                    abs_time_val = abs_row['time']
-
-                    # =========================================================================
-                    # STEP 2: Find the Pre-Drop Peak (Glitch-proofed)
-                    # =========================================================================
-                    # Create an independent safe limit specifically for the drop search (80% boundary)
-                    if meas_1 == meas_2:
-                        # Duplicate: no wash, safe to look to the very end
-                        t_safe_drop_end = t_end 
-                    elif meas_2 == 'Final':
-                        # Final: limit by 80% of max standard cycle
-                        t_safe_drop_end = t_start + (max_standard_cycle * 0.8)
-                    else:
-                        # Standard: wash is at the very end, 80% is a safe cutoff
-                        t_safe_drop_end = t_start + (t_end - t_start) * 0.8
-                        
-                    # Apply this boundary to find our max search index for the drop
-                    search_limit_idx = zone[zone['time'] <= t_safe_drop_end].index.max()
-
-                    # Query the SPIKE-PROOFED drop size from the absolute peak to our defined 80% safe limit
-                    valid_drop_sizes = global_drop_size.loc[absolute_peak_idx : search_limit_idx]
-                    
-                    if not valid_drop_sizes.dropna().empty:
-                        pre_drop_idx = valid_drop_sizes.idxmax()
-                    else:
-                        pre_drop_idx = absolute_peak_idx # Fallback in case of flatline
-
-                    # Extract the exact values for the pre-drop peak from the RAW data
-                    pre_drop_row = file_data.loc[pre_drop_idx]
-
-                    ch1_peak_val = pre_drop_row['channel1']
-                    ch2_peak_val = pre_drop_row['channel2']
-                    peak_time_val = pre_drop_row['time']
-
-                    # =========================================================================
-                    # STEP 3: Baseline Targeting (anchored to the pre-drop peak)
-                    # =========================================================================
-                    max_zone_idx = zone.index.max()
-
-                    # Determines the target baseline index by stepping forward from the pre-drop peak
-                    target_baseline_idx = pre_drop_idx + total_block_rows - tail_sample_offset
-        
-                    if target_baseline_idx > max_zone_idx:
-                        target_baseline_idx = max(pre_drop_idx + lookahead_rows, max_zone_idx - tail_sample_offset)
-                    
-                    target_baseline_idx = max(pre_drop_idx, min(target_baseline_idx, max_zone_idx))
-                    baseline_row = file_data.loc[target_baseline_idx]
-        
-                    t_base = baseline_row['time']
-                    t_start_win = t_base - 2.5
-                    t_end_win = t_base + 2.5
-                    
-                    # Isolates the five-second window zone centred around the target baseline time
-                    win_zone = file_data[(file_data['time'] >= t_start_win) & (file_data['time'] <= t_end_win)]
-                    
-                    ch1_win_avg = win_zone['channel1'].mean() if not win_zone.empty else baseline_row['channel1']
-                    ch2_win_avg = win_zone['channel2'].mean() if not win_zone.empty else baseline_row['channel2']
-                    
-                    # Stores the calculated baseline and both peak metrics into the row collection
-                    saved_file_rows.append({
-                        'Window_Start': t_start_win,
-                        'Window_End': t_end_win,
-                        'information': f'Baseline Window ({meas_1} / {meas_2})',
-                        'ch1_avg': ch1_win_avg,
-                        'ch2_avg': ch2_win_avg,
-                        'ch1_absolute_peak': ch1_abs_val,
-                        'ch2_absolute_peak': ch2_abs_val,
-                        'absolute_peak_time': abs_time_val,
-                        'ch1_peak': ch1_peak_val,
-                        'ch2_peak': ch2_peak_val,
-                        'peak_time': peak_time_val
-                    })
-                    
-                t_absolute_last = file_data['time'].max()
-                t_start_final = t_absolute_last - 5.0
-                t_end_final = t_absolute_last
-                
-                # Isolates the final baseline zone at the end of the recording and calculates averages
-                final_zone = file_data[(file_data['time'] >= t_start_final) & (file_data['time'] <= t_end_final)]
-        
-                saved_file_rows.append({
-                    'Window_Start': t_start_final,
-                    'Window_End': t_end_final,
-                    'information': 'Final Baseline',
-                    'ch1_avg': final_zone['channel1'].mean(),
-                    'ch2_avg': final_zone['channel2'].mean(),
-                    'ch1_absolute_peak': np.nan,
-                    'ch2_absolute_peak': np.nan,
-                    'absolute_peak_time': np.nan,
-                    'ch1_peak': np.nan,
-                    'ch2_peak': np.nan,
-                    'peak_time': np.nan
-                })
-
-                print(f'Calculated flags for {folder}/{file}')
-                flag_df = pd.DataFrame(saved_file_rows)
-                file_name = file.split('_')[1] + '_baseline_flags.csv'
-                file_path = os.path.join(save_dir, str(folder), file_name)
-                
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                
-                # Saves the calculated baseline flags to a new CSV file
-                flag_df.to_csv(file_path, index=False)
-        
-                files[folder][file_name.replace('.csv', '')] = flag_df
-
-            previous_file = file
-
-    return files
-"""
-
-# nearly works perfectly
-"""def calculate_sc_flags(files, save_dir='Standard Curve Files'):
-    '''Calculates dynamic baseline and peak flags from sensorgram data, saves them to a CSV, updates the dictionary, and optionally plots the results.
-
-    Args:
-        files (dict): Dictionary holding the parsed file data.
-        save_dir (str): Root directory where the CSV files should be saved.
-
-    Returns:
-        dict: The updated files dictionary containing the new baseline flag dataframes.
-    '''
-
-    # Loops through each folder in the files dictionary
-    for folder in files.keys():
-        previous_file = ''
-
-        # Loops through each file in the current folder
-        for file in list(files[folder].keys()):
-
-            if 'sensorgram' in file:
-
-                file_data = files[folder][file].sort_values('time').reset_index(drop=True)
-                previous_file_data = files[folder][previous_file].sort_values('time').reset_index(drop=True)
-
-                # Calculates the median time step to define window row counts
-                median_time_step = file_data['time'].diff().median()
-                lookahead_rows = max(1, int(5 / median_time_step))
-                
-                total_block_rows = int(30 / median_time_step) 
-                tail_sample_offset = int(5 / median_time_step)
-                
-                intervals = []
-
-                # Loops through each previous file data index to extract interval times and measurements
-                for i in range(len(previous_file_data) - 1):
-
-                    t_start = previous_file_data.iloc[i]['time']
-                    t_end = previous_file_data.iloc[i+1]['time']
-                    meas_1 = str(previous_file_data.iloc[i]['conc']).split('-')[0]
-                    meas_2 = str(previous_file_data.iloc[i+1]['conc']).split('-')[0]
-                    intervals.append((t_start, t_end, meas_1, meas_2))
-                    
-                last_meas = str(previous_file_data.iloc[-1]['conc']).split('-')[0]
-                intervals.append((previous_file_data.iloc[-1]['time'], file_data['time'].max(), last_meas, 'Final'))
-                
-                # Calculates the max cycle duration to protect the final measurement from arbitrary file lengths
-                cycle_lengths = [t_end - t_start for (t_start, t_end, m1, m2) in intervals if m2 != 'Final']
-                max_standard_cycle = max(cycle_lengths) if cycle_lengths else 600.0
-                
-                # =========================================================================
-                # GLOBAL DROP CALCULATION (Spike-Proofed)
-                # =========================================================================
-                # 1. Apply a 1-second rolling median to the entire file to erase negative glitches.
-                median_win = max(1, int(1.0 / median_time_step))
-                spike_proof_signal = file_data['channel1'].rolling(window=median_win, center=True, min_periods=1).median()
-                
-                # 2. Calculate a 10s forward drop to ignore transient spikes/glitches
-                look_fwd = max(1, int(10.0 / median_time_step))
-                global_drop_size = spike_proof_signal - spike_proof_signal.shift(-look_fwd)
-                    
-                saved_file_rows = []
-                
-                t_absolute_first = file_data['time'].min()
-                t_start_init = t_absolute_first
-                t_end_init = t_absolute_first + 5.0
-                
-                # Isolates the initial baseline zone at the absolute start of the recording
-                init_zone = file_data[(file_data['time'] >= t_start_init) & (file_data['time'] <= t_end_init)]
-
-                # Checks whether the dataframe contains data
-                if not init_zone.empty:
-
-                    saved_file_rows.append({
-                        'Window_Start': t_start_init,
-                        'Window_End': t_end_init,
-                        'information': 'Initial Baseline',
-                        'ch1_avg': init_zone['channel1'].mean(),
-                        'ch2_avg': init_zone['channel2'].mean(),
-                        'ch1_absolute_peak': np.nan,
-                        'ch2_absolute_peak': np.nan,
-                        'absolute_peak_time': np.nan,
-                        'ch1_peak': np.nan,
-                        'ch2_peak': np.nan,
-                        'peak_time': np.nan
-                    })
-    
-                # Loops through each enumerated interval
-                for idx, (t_start, t_end, meas_1, meas_2) in enumerate(intervals):
-
-                    zone = file_data[(file_data['time'] >= t_start) & (file_data['time'] <= t_end)]
-
-                    if zone.empty:
-                        continue
-                        
-                    # Calculate the midpoint of the interval for Step 1
-                    t_mid = t_start + (t_end - t_start) / 2
-
-                    # Strictly isolate the FIRST HALF of the interval
-                    first_half_zone = zone[zone['time'] <= t_mid]
-
-                    if first_half_zone.empty:
-                        first_half_zone = zone
-                        
-                    # =========================================================================
-                    # STEP 1: Find the Absolute Peak (UNTOUCHED)
-                    # =========================================================================
-                    smooth_window_abs = max(1, int(3.0 / median_time_step))
-                    smoothed_first_half = first_half_zone['channel1'].rolling(window=smooth_window_abs, center=True, min_periods=1).mean()
-                    
-                    smoothed_peak_idx = smoothed_first_half.idxmax()
-                    
-                    search_start_abs = max(first_half_zone.index.min(), smoothed_peak_idx - int(1.0 / median_time_step))
-                    search_end_abs = min(first_half_zone.index.max(), smoothed_peak_idx + int(1.0 / median_time_step))
-                    
-                    absolute_peak_idx = first_half_zone.loc[search_start_abs:search_end_abs, 'channel1'].idxmax()
-                    abs_row = file_data.loc[absolute_peak_idx]
-
-                    ch1_abs_val = abs_row['channel1']
-                    ch2_abs_val = abs_row['channel2']
-                    abs_time_val = abs_row['time']
-
-                    # =========================================================================
-                    # STEP 2: Find the Pre-Drop Peak (Glitch-proofed with 10s delay logic)
-                    # =========================================================================
-                    # Create an independent safe limit specifically for the drop search (80% boundary)
-                    if meas_1 == meas_2:
-                        t_safe_drop_end = t_end 
-                    elif meas_2 == 'Final':
-                        t_safe_drop_end = t_start + (max_standard_cycle * 0.8)
-                    else:
-                        t_safe_drop_end = t_start + (t_end - t_start) * 0.8
-                        
-                    # Apply this boundary to find our max search index for the drop
-                    search_limit_idx = zone[zone['time'] <= t_safe_drop_end].index.max()
-
-                    # Query the SPIKE-PROOFED drop size from the absolute peak to our defined 80% safe limit
-                    valid_drop_sizes = global_drop_size.loc[absolute_peak_idx : search_limit_idx]
-                    
-                    if not valid_drop_sizes.dropna().empty:
-                        raw_drop_idx = valid_drop_sizes.idxmax()
-                        
-                        # Search for the local maximum in the 10 seconds PRIOR to the detected drop
-                        lookback_rows = int(10.0 / median_time_step)
-                        search_start = max(absolute_peak_idx, raw_drop_idx - lookback_rows)
-                        
-                        # This places the pre-drop peak perfectly on the plateau
-                        pre_drop_idx = file_data.loc[search_start : raw_drop_idx, 'channel1'].idxmax()
-                    else:
-                        pre_drop_idx = absolute_peak_idx # Fallback in case of flatline
-
-                    # Extract the exact values for the pre-drop peak from the RAW data
-                    pre_drop_row = file_data.loc[pre_drop_idx]
-
-                    ch1_peak_val = pre_drop_row['channel1']
-                    ch2_peak_val = pre_drop_row['channel2']
-                    peak_time_val = pre_drop_row['time']
-
-                    # =========================================================================
-                    # STEP 3: Baseline Targeting (anchored to the pre-drop peak)
-                    # =========================================================================
-                    max_zone_idx = zone.index.max()
-
-                    # Determines the target baseline index by stepping forward from the pre-drop peak
-                    target_baseline_idx = pre_drop_idx + total_block_rows - tail_sample_offset
-        
-                    if target_baseline_idx > max_zone_idx:
-                        target_baseline_idx = max(pre_drop_idx + lookahead_rows, max_zone_idx - tail_sample_offset)
-                    
-                    target_baseline_idx = max(pre_drop_idx, min(target_baseline_idx, max_zone_idx))
-                    baseline_row = file_data.loc[target_baseline_idx]
-        
-                    t_base = baseline_row['time']
-                    t_start_win = t_base - 2.5
-                    t_end_win = t_base + 2.5
-                    
-                    # Isolates the five-second window zone centred around the target baseline time
-                    win_zone = file_data[(file_data['time'] >= t_start_win) & (file_data['time'] <= t_end_win)]
-                    
-                    ch1_win_avg = win_zone['channel1'].mean() if not win_zone.empty else baseline_row['channel1']
-                    ch2_win_avg = win_zone['channel2'].mean() if not win_zone.empty else baseline_row['channel2']
-                    
-                    # Stores the calculated baseline and both peak metrics into the row collection
-                    saved_file_rows.append({
-                        'Window_Start': t_start_win,
-                        'Window_End': t_end_win,
-                        'information': f'Baseline Window ({meas_1} / {meas_2})',
-                        'ch1_avg': ch1_win_avg,
-                        'ch2_avg': ch2_win_avg,
-                        'ch1_absolute_peak': ch1_abs_val,
-                        'ch2_absolute_peak': ch2_abs_val,
-                        'absolute_peak_time': abs_time_val,
-                        'ch1_peak': ch1_peak_val,
-                        'ch2_peak': ch2_peak_val,
-                        'peak_time': peak_time_val
-                    })
-                    
-                t_absolute_last = file_data['time'].max()
-                t_start_final = t_absolute_last - 5.0
-                t_end_final = t_absolute_last
-                
-                # Isolates the final baseline zone at the end of the recording and calculates averages
-                final_zone = file_data[(file_data['time'] >= t_start_final) & (file_data['time'] <= t_end_final)]
-        
-                saved_file_rows.append({
-                    'Window_Start': t_start_final,
-                    'Window_End': t_end_final,
-                    'information': 'Final Baseline',
-                    'ch1_avg': final_zone['channel1'].mean(),
-                    'ch2_avg': final_zone['channel2'].mean(),
-                    'ch1_absolute_peak': np.nan,
-                    'ch2_absolute_peak': np.nan,
-                    'absolute_peak_time': np.nan,
-                    'ch1_peak': np.nan,
-                    'ch2_peak': np.nan,
-                    'peak_time': np.nan
-                })
-
-                print(f'Calculated flags for {folder}/{file}')
-                flag_df = pd.DataFrame(saved_file_rows)
-                file_name = file.split('_')[1] + '_baseline_flags.csv'
-                file_path = os.path.join(save_dir, str(folder), file_name)
-                
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                
-                # Saves the calculated baseline flags to a new CSV file
-                flag_df.to_csv(file_path, index=False)
-        
-                files[folder][file_name.replace('.csv', '')] = flag_df
-
-            previous_file = file
-
-    return files
-"""
-
-# Works but gets mix up random noise spike
-"""def calculate_sc_flags(files, save_dir='Standard Curve Files'):
-    '''Calculates dynamic baseline and peak flags from sensorgram data, saves them to a CSV, updates the dictionary, and optionally plots the results.
-
-    Args:
-        files (dict): Dictionary holding the parsed file data.
-        save_dir (str): Root directory where the CSV files should be saved.
-
-    Returns:
-        dict: The updated files dictionary containing the new baseline flag dataframes.
-    '''
-
-    # Loops through each folder in the files dictionary
-    for folder in files.keys():
-        previous_file = ''
-
-        # Loops through each file in the current folder
-        for file in list(files[folder].keys()):
-
-            if 'sensorgram' in file:
-
-                file_data = files[folder][file].sort_values('time').reset_index(drop=True)
-                previous_file_data = files[folder][previous_file].sort_values('time').reset_index(drop=True)
-
-                # Calculates the median time step to define window row counts
-                median_time_step = file_data['time'].diff().median()
-                lookahead_rows = max(1, int(5 / median_time_step))
-                
-                total_block_rows = int(30 / median_time_step) 
-                tail_sample_offset = int(5 / median_time_step)
-                
-                intervals = []
-
-                # Loops through each previous file data index to extract interval times and measurements
-                for i in range(len(previous_file_data) - 1):
-
-                    t_start = previous_file_data.iloc[i]['time']
-                    t_end = previous_file_data.iloc[i+1]['time']
-                    meas_1 = str(previous_file_data.iloc[i]['conc']).split('-')[0]
-                    meas_2 = str(previous_file_data.iloc[i+1]['conc']).split('-')[0]
-                    intervals.append((t_start, t_end, meas_1, meas_2))
-                    
-                last_meas = str(previous_file_data.iloc[-1]['conc']).split('-')[0]
-                intervals.append((previous_file_data.iloc[-1]['time'], file_data['time'].max(), last_meas, 'Final'))
-                
-                # Calculates the max cycle duration to protect the final measurement from arbitrary file lengths
-                cycle_lengths = [t_end - t_start for (t_start, t_end, m1, m2) in intervals if m2 != 'Final']
-                max_standard_cycle = max(cycle_lengths) if cycle_lengths else 600.0
-                
-                # =========================================================================
-                # GLOBAL DROP CALCULATION (Spike-Proofed)
-                # =========================================================================
-                # 1. Apply a 1-second rolling median to the entire file to erase negative glitches.
-                median_win = max(1, int(1.0 / median_time_step))
-                spike_proof_signal = file_data['channel1'].rolling(window=median_win, center=True, min_periods=1).median()
-                
-                # 2. Calculate a 10s forward drop to ignore transient spikes/glitches
-                look_fwd = max(1, int(10.0 / median_time_step))
-                global_drop_size = spike_proof_signal - spike_proof_signal.shift(-look_fwd)
-                    
-                saved_file_rows = []
-                
-                t_absolute_first = file_data['time'].min()
-                t_start_init = t_absolute_first
-                t_end_init = t_absolute_first + 5.0
-                
-                # Isolates the initial baseline zone at the absolute start of the recording
-                init_zone = file_data[(file_data['time'] >= t_start_init) & (file_data['time'] <= t_end_init)]
-
-                # Checks whether the dataframe contains data
-                if not init_zone.empty:
-
-                    saved_file_rows.append({
-                        'Window_Start': t_start_init,
-                        'Window_End': t_end_init,
-                        'information': 'Initial Baseline',
-                        'ch1_avg': init_zone['channel1'].mean(),
-                        'ch2_avg': init_zone['channel2'].mean(),
-                        'ch1_absolute_peak': np.nan,
-                        'ch2_absolute_peak': np.nan,
-                        'absolute_peak_time': np.nan,
-                        'ch1_peak': np.nan,
-                        'ch2_peak': np.nan,
-                        'peak_time': np.nan
-                    })
-    
-                # Loops through each enumerated interval
-                for idx, (t_start, t_end, meas_1, meas_2) in enumerate(intervals):
-
-                    zone = file_data[(file_data['time'] >= t_start) & (file_data['time'] <= t_end)]
-
-                    if zone.empty:
-                        continue
-                        
-                    # Calculate the midpoint of the interval for Step 1
-                    t_mid = t_start + (t_end - t_start) / 2
-
-                    # Strictly isolate the FIRST HALF of the interval
-                    first_half_zone = zone[zone['time'] <= t_mid]
-
-                    if first_half_zone.empty:
-                        first_half_zone = zone
-                        
-                    # =========================================================================
-                    # STEP 1: Find the Absolute Peak (UNTOUCHED)
-                    # =========================================================================
-                    smooth_window_abs = max(1, int(3.0 / median_time_step))
-                    smoothed_first_half = first_half_zone['channel1'].rolling(window=smooth_window_abs, center=True, min_periods=1).mean()
-                    
-                    smoothed_peak_idx = smoothed_first_half.idxmax()
-                    
-                    search_start_abs = max(first_half_zone.index.min(), smoothed_peak_idx - int(1.0 / median_time_step))
-                    search_end_abs = min(first_half_zone.index.max(), smoothed_peak_idx + int(1.0 / median_time_step))
-                    
-                    absolute_peak_idx = first_half_zone.loc[search_start_abs:search_end_abs, 'channel1'].idxmax()
-                    abs_row = file_data.loc[absolute_peak_idx]
-
-                    ch1_abs_val = abs_row['channel1']
-                    ch2_abs_val = abs_row['channel2']
-                    abs_time_val = abs_row['time']
-
-                    # =========================================================================
-                    # STEP 2: Find the Pre-Drop Peak (Glitch-proofed with delays)
-                    # =========================================================================
-                    # Create an independent safe limit specifically for the drop search (80% boundary)
-                    if meas_1 == meas_2:
-                        t_safe_drop_end = t_end 
-                    elif meas_2 == 'Final':
-                        t_safe_drop_end = t_start + (max_standard_cycle * 0.8)
-                    else:
-                        t_safe_drop_end = t_start + (t_end - t_start) * 0.8
-                        
-                    # Apply this boundary to find our max search index for the drop
-                    search_limit_idx = zone[zone['time'] <= t_safe_drop_end].index.max()
-
-                    # Impose a 10-second delay strictly AFTER the absolute peak before searching for the drop
-                    delay_rows = int(10.0 / median_time_step)
-                    search_start_idx = absolute_peak_idx + delay_rows
-                    
-                    # Fallback in case the delay pushes us past the search limit
-                    if search_start_idx > search_limit_idx:
-                        search_start_idx = absolute_peak_idx
-
-                    # Query the SPIKE-PROOFED drop size using our delayed start
-                    valid_drop_sizes = global_drop_size.loc[search_start_idx : search_limit_idx]
-                    
-                    if not valid_drop_sizes.dropna().empty:
-                        raw_drop_idx = valid_drop_sizes.idxmax()
-                        
-                        # Search for the local maximum strictly within 3 seconds PRIOR to the detected drop
-                        lookback_rows = int(3.0 / median_time_step)
-                        search_start = max(absolute_peak_idx, raw_drop_idx - lookback_rows)
-                        
-                        # This places the pre-drop peak firmly on the edge of the plateau
-                        pre_drop_idx = file_data.loc[search_start : raw_drop_idx, 'channel1'].idxmax()
-                    else:
-                        pre_drop_idx = absolute_peak_idx # Fallback in case of flatline
-
-                    # Extract the exact values for the pre-drop peak from the RAW data
-                    pre_drop_row = file_data.loc[pre_drop_idx]
-
-                    ch1_peak_val = pre_drop_row['channel1']
-                    ch2_peak_val = pre_drop_row['channel2']
-                    peak_time_val = pre_drop_row['time']
-
-                    # =========================================================================
-                    # STEP 3: Baseline Targeting (anchored to the pre-drop peak)
-                    # =========================================================================
-                    max_zone_idx = zone.index.max()
-
-                    # Determines the target baseline index by stepping forward from the pre-drop peak
-                    target_baseline_idx = pre_drop_idx + total_block_rows - tail_sample_offset
-        
-                    if target_baseline_idx > max_zone_idx:
-                        target_baseline_idx = max(pre_drop_idx + lookahead_rows, max_zone_idx - tail_sample_offset)
-                    
-                    target_baseline_idx = max(pre_drop_idx, min(target_baseline_idx, max_zone_idx))
-                    baseline_row = file_data.loc[target_baseline_idx]
-        
-                    t_base = baseline_row['time']
-                    t_start_win = t_base - 2.5
-                    t_end_win = t_base + 2.5
-                    
-                    # Isolates the five-second window zone centred around the target baseline time
-                    win_zone = file_data[(file_data['time'] >= t_start_win) & (file_data['time'] <= t_end_win)]
-                    
-                    ch1_win_avg = win_zone['channel1'].mean() if not win_zone.empty else baseline_row['channel1']
-                    ch2_win_avg = win_zone['channel2'].mean() if not win_zone.empty else baseline_row['channel2']
-                    
-                    # Stores the calculated baseline and both peak metrics into the row collection
-                    saved_file_rows.append({
-                        'Window_Start': t_start_win,
-                        'Window_End': t_end_win,
-                        'information': f'Baseline Window ({meas_1} / {meas_2})',
-                        'ch1_avg': ch1_win_avg,
-                        'ch2_avg': ch2_win_avg,
-                        'ch1_absolute_peak': ch1_abs_val,
-                        'ch2_absolute_peak': ch2_abs_val,
-                        'absolute_peak_time': abs_time_val,
-                        'ch1_peak': ch1_peak_val,
-                        'ch2_peak': ch2_peak_val,
-                        'peak_time': peak_time_val
-                    })
-                    
-                t_absolute_last = file_data['time'].max()
-                t_start_final = t_absolute_last - 5.0
-                t_end_final = t_absolute_last
-                
-                # Isolates the final baseline zone at the end of the recording and calculates averages
-                final_zone = file_data[(file_data['time'] >= t_start_final) & (file_data['time'] <= t_end_final)]
-        
-                saved_file_rows.append({
-                    'Window_Start': t_start_final,
-                    'Window_End': t_end_final,
-                    'information': 'Final Baseline',
-                    'ch1_avg': final_zone['channel1'].mean(),
-                    'ch2_avg': final_zone['channel2'].mean(),
-                    'ch1_absolute_peak': np.nan,
-                    'ch2_absolute_peak': np.nan,
-                    'absolute_peak_time': np.nan,
-                    'ch1_peak': np.nan,
-                    'ch2_peak': np.nan,
-                    'peak_time': np.nan
-                })
-
-                print(f'Calculated flags for {folder}/{file}')
-                flag_df = pd.DataFrame(saved_file_rows)
-                file_name = file.split('_')[1] + '_baseline_flags.csv'
-                file_path = os.path.join(save_dir, str(folder), file_name)
-                
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                
-                # Saves the calculated baseline flags to a new CSV file
-                flag_df.to_csv(file_path, index=False)
-        
-                files[folder][file_name.replace('.csv', '')] = flag_df
-
-            previous_file = file
-
-    return files
-"""
-
-"""def calculate_sc_flags(files, save_dir='Standard Curve Files'):
-    '''Calculates dynamic baseline and peak flags from sensorgram data, saves them to a CSV, updates the dictionary, and optionally plots the results.
-
-    Args:
-        files (dict): Dictionary holding the parsed file data.
-        save_dir (str): Root directory where the CSV files should be saved.
-
-    Returns:
-        dict: The updated files dictionary containing the new baseline flag dataframes.
-    '''
-
-    # Loops through each folder in the files dictionary
-    for folder in files.keys():
-        previous_file = ''
-
-        # Loops through each file in the current folder
-        for file in list(files[folder].keys()):
-
-            if 'sensorgram' in file:
-
-                file_data = files[folder][file].sort_values('time').reset_index(drop=True)
-                previous_file_data = files[folder][previous_file].sort_values('time').reset_index(drop=True)
-
-                # Calculates the median time step to define window row counts
-                median_time_step = file_data['time'].diff().median()
-                lookahead_rows = max(1, int(5 / median_time_step))
-                
-                total_block_rows = int(30 / median_time_step) 
-                tail_sample_offset = int(5 / median_time_step)
-                
-                intervals = []
-
-                # Loops through each previous file data index to extract interval times and measurements
-                for i in range(len(previous_file_data) - 1):
-
-                    t_start = previous_file_data.iloc[i]['time']
-                    t_end = previous_file_data.iloc[i+1]['time']
-                    meas_1 = str(previous_file_data.iloc[i]['conc']).split('-')[0]
-                    meas_2 = str(previous_file_data.iloc[i+1]['conc']).split('-')[0]
-                    intervals.append((t_start, t_end, meas_1, meas_2))
-                    
-                last_meas = str(previous_file_data.iloc[-1]['conc']).split('-')[0]
-                intervals.append((previous_file_data.iloc[-1]['time'], file_data['time'].max(), last_meas, 'Final'))
-                
-                # Calculates the max cycle duration to protect the final measurement from arbitrary file lengths
-                cycle_lengths = [t_end - t_start for (t_start, t_end, m1, m2) in intervals if m2 != 'Final']
-                max_standard_cycle = max(cycle_lengths) if cycle_lengths else 600.0
-                
-                # =========================================================================
-                # GLOBAL DROP CALCULATION (Spike-Proofed Edge Detection)
-                # =========================================================================
-                # We calculate the difference between the trailing average and leading average.
-                # This completely neutralizes spikes (since their 5-second average mass is tiny) 
-                # while heavily amplifying true sustained step-downs (like a wash step).
-                avg_win = max(1, int(5.0 / median_time_step))
-                
-                # Trailing average (looks backwards 5s)
-                trailing_avg = file_data['channel1'].rolling(window=avg_win, min_periods=1).mean()
-                
-                # Leading average (looks forwards 5s by shifting trailing back)
-                leading_avg = trailing_avg.shift(-avg_win)
-                
-                # The true wash drop maximizes this sustained difference
-                global_drop_size = trailing_avg - leading_avg
-                    
-                saved_file_rows = []
-                
-                t_absolute_first = file_data['time'].min()
-                t_start_init = t_absolute_first
-                t_end_init = t_absolute_first + 5.0
-                
-                # Isolates the initial baseline zone at the absolute start of the recording
-                init_zone = file_data[(file_data['time'] >= t_start_init) & (file_data['time'] <= t_end_init)]
-
-                # Checks whether the dataframe contains data
-                if not init_zone.empty:
-
-                    saved_file_rows.append({
-                        'Window_Start': t_start_init,
-                        'Window_End': t_end_init,
-                        'information': 'Initial Baseline',
-                        'ch1_avg': init_zone['channel1'].mean(),
-                        'ch2_avg': init_zone['channel2'].mean(),
-                        'ch1_absolute_peak': np.nan,
-                        'ch2_absolute_peak': np.nan,
-                        'absolute_peak_time': np.nan,
-                        'ch1_peak': np.nan,
-                        'ch2_peak': np.nan,
-                        'peak_time': np.nan
-                    })
-    
-                # Loops through each enumerated interval
-                for idx, (t_start, t_end, meas_1, meas_2) in enumerate(intervals):
-
-                    zone = file_data[(file_data['time'] >= t_start) & (file_data['time'] <= t_end)]
-
-                    if zone.empty:
-                        continue
-                        
-                    # Calculate the midpoint of the interval for Step 1
-                    t_mid = t_start + (t_end - t_start) / 2
-
-                    # Strictly isolate the FIRST HALF of the interval
-                    first_half_zone = zone[zone['time'] <= t_mid]
-
-                    if first_half_zone.empty:
-                        first_half_zone = zone
-                        
-                    # =========================================================================
-                    # STEP 1: Find the Absolute Peak (UNTOUCHED)
-                    # =========================================================================
-                    smooth_window_abs = max(1, int(3.0 / median_time_step))
-                    smoothed_first_half = first_half_zone['channel1'].rolling(window=smooth_window_abs, center=True, min_periods=1).mean()
-                    
-                    smoothed_peak_idx = smoothed_first_half.idxmax()
-                    
-                    search_start_abs = max(first_half_zone.index.min(), smoothed_peak_idx - int(1.0 / median_time_step))
-                    search_end_abs = min(first_half_zone.index.max(), smoothed_peak_idx + int(1.0 / median_time_step))
-                    
-                    absolute_peak_idx = first_half_zone.loc[search_start_abs:search_end_abs, 'channel1'].idxmax()
-                    abs_row = file_data.loc[absolute_peak_idx]
-
-                    ch1_abs_val = abs_row['channel1']
-                    ch2_abs_val = abs_row['channel2']
-                    abs_time_val = abs_row['time']
-
-                    # =========================================================================
-                    # STEP 2: Find the Pre-Drop Peak (Glitch-proofed with delays)
-                    # =========================================================================
-                    # Create an independent safe limit specifically for the drop search (80% boundary)
-                    if meas_1 == meas_2:
-                        t_safe_drop_end = t_end 
-                    elif meas_2 == 'Final':
-                        t_safe_drop_end = t_start + (max_standard_cycle * 0.8)
-                    else:
-                        t_safe_drop_end = t_start + (t_end - t_start) * 0.8
-                        
-                    # Apply this boundary to find our max search index for the drop
-                    search_limit_idx = zone[zone['time'] <= t_safe_drop_end].index.max()
-
-                    # Impose a 10-second delay strictly AFTER the absolute peak before searching for the drop
-                    delay_rows = int(10.0 / median_time_step)
-                    search_start_idx = absolute_peak_idx + delay_rows
-                    
-                    # Fallback in case the delay pushes us past the search limit
-                    if search_start_idx > search_limit_idx:
-                        search_start_idx = absolute_peak_idx
-
-                    # Query the SPIKE-PROOFED drop size using our delayed start
-                    valid_drop_sizes = global_drop_size.loc[search_start_idx : search_limit_idx]
-                    
-                    if not valid_drop_sizes.dropna().empty:
-                        raw_drop_idx = valid_drop_sizes.idxmax()
-                        
-                        # Search for the local maximum strictly within 3 seconds PRIOR to the detected drop
-                        lookback_rows = int(3.0 / median_time_step)
-                        search_start = max(absolute_peak_idx, raw_drop_idx - lookback_rows)
-                        
-                        # I added a gentle 1-second smoothing here just so the 'X' doesn't lock onto 
-                        # micro-noise spikes on the plateau surface either!
-                        noise_filter_win = max(1, int(1.0 / median_time_step))
-                        smoothed_search_zone = file_data.loc[search_start : raw_drop_idx, 'channel1'].rolling(window=noise_filter_win, center=True, min_periods=1).mean()
-                        
-                        # This places the pre-drop peak firmly on the edge of the plateau
-                        pre_drop_idx = smoothed_search_zone.idxmax()
-                    else:
-                        pre_drop_idx = absolute_peak_idx # Fallback in case of flatline
-
-                    # Extract the exact values for the pre-drop peak from the RAW data
-                    pre_drop_row = file_data.loc[pre_drop_idx]
-
-                    ch1_peak_val = pre_drop_row['channel1']
-                    ch2_peak_val = pre_drop_row['channel2']
-                    peak_time_val = pre_drop_row['time']
-
-                    # =========================================================================
-                    # STEP 3: Baseline Targeting (anchored to the pre-drop peak)
-                    # =========================================================================
-                    max_zone_idx = zone.index.max()
-
-                    # Determines the target baseline index by stepping forward from the pre-drop peak
-                    target_baseline_idx = pre_drop_idx + total_block_rows - tail_sample_offset
-        
-                    if target_baseline_idx > max_zone_idx:
-                        target_baseline_idx = max(pre_drop_idx + lookahead_rows, max_zone_idx - tail_sample_offset)
-                    
-                    target_baseline_idx = max(pre_drop_idx, min(target_baseline_idx, max_zone_idx))
-                    baseline_row = file_data.loc[target_baseline_idx]
-        
-                    t_base = baseline_row['time']
-                    t_start_win = t_base - 2.5
-                    t_end_win = t_base + 2.5
-                    
-                    # Isolates the five-second window zone centred around the target baseline time
-                    win_zone = file_data[(file_data['time'] >= t_start_win) & (file_data['time'] <= t_end_win)]
-                    
-                    ch1_win_avg = win_zone['channel1'].mean() if not win_zone.empty else baseline_row['channel1']
-                    ch2_win_avg = win_zone['channel2'].mean() if not win_zone.empty else baseline_row['channel2']
-                    
-                    # Stores the calculated baseline and both peak metrics into the row collection
-                    saved_file_rows.append({
-                        'Window_Start': t_start_win,
-                        'Window_End': t_end_win,
-                        'information': f'Baseline Window ({meas_1} / {meas_2})',
-                        'ch1_avg': ch1_win_avg,
-                        'ch2_avg': ch2_win_avg,
-                        'ch1_absolute_peak': ch1_abs_val,
-                        'ch2_absolute_peak': ch2_abs_val,
-                        'absolute_peak_time': abs_time_val,
-                        'ch1_peak': ch1_peak_val,
-                        'ch2_peak': ch2_peak_val,
-                        'peak_time': peak_time_val
-                    })
-                    
-                t_absolute_last = file_data['time'].max()
-                t_start_final = t_absolute_last - 5.0
-                t_end_final = t_absolute_last
-                
-                # Isolates the final baseline zone at the end of the recording and calculates averages
-                final_zone = file_data[(file_data['time'] >= t_start_final) & (file_data['time'] <= t_end_final)]
-        
-                saved_file_rows.append({
-                    'Window_Start': t_start_final,
-                    'Window_End': t_end_final,
-                    'information': 'Final Baseline',
-                    'ch1_avg': final_zone['channel1'].mean(),
-                    'ch2_avg': final_zone['channel2'].mean(),
-                    'ch1_absolute_peak': np.nan,
-                    'ch2_absolute_peak': np.nan,
-                    'absolute_peak_time': np.nan,
-                    'ch1_peak': np.nan,
-                    'ch2_peak': np.nan,
-                    'peak_time': np.nan
-                })
-
-                print(f'Calculated flags for {folder}/{file}')
-                flag_df = pd.DataFrame(saved_file_rows)
-                file_name = file.split('_')[1] + '_baseline_flags.csv'
-                file_path = os.path.join(save_dir, str(folder), file_name)
-                
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                
-                # Saves the calculated baseline flags to a new CSV file
-                flag_df.to_csv(file_path, index=False)
-        
-                files[folder][file_name.replace('.csv', '')] = flag_df
-
-            previous_file = file
-
-    return files
-"""
-
-
 def calculate_absolute_peak(file_data, zone, median_time_step, t_start):
     '''Finds the absolute peak using a targeted window ~70s after the start flag.'''
     
@@ -3071,7 +2008,7 @@ def calculate_pre_drop_peak(file_data, zone, absolute_peak_idx, global_drop_size
     
     return pre_drop_idx, pre_drop_row['channel1'], pre_drop_row['channel2'], pre_drop_row['time']
 
-def calculate_baseline(file_data, zone, pre_drop_idx, total_block_rows, tail_sample_offset, lookahead_rows):
+"""def calculate_baseline(file_data, zone, pre_drop_idx, total_block_rows, tail_sample_offset, lookahead_rows):
     '''Calculates baseline coordinates and averages anchored to the pre-drop peak.
     
     Args:
@@ -3108,6 +2045,101 @@ def calculate_baseline(file_data, zone, pre_drop_idx, total_block_rows, tail_sam
     ch2_win_avg = win_zone['channel2'].mean() if not win_zone.empty else baseline_row['channel2']
     
     return t_start_win, t_end_win, ch1_win_avg, ch2_win_avg
+"""
+
+def calculate_baselines(file_data, zone, pre_drop_idx, median_time_step):
+    '''Calculates baselines dynamically by mapping the flat regions between steep edges.'''
+    
+    baselines = []
+    
+    # Isolate data from the pre-drop peak onwards
+    zone_data = file_data.loc[pre_drop_idx : zone.index.max()].copy()
+    
+    if zone_data.empty:
+        return baselines
+        
+    t_start = file_data.loc[pre_drop_idx, 'time']
+    
+    # Locate the trough (the bottom of the initial wash drop)
+    search_end = min(zone['time'].max(), t_start + 45.0)
+    trough_zone = zone_data[zone_data['time'] <= search_end]
+    
+    if not trough_zone.empty:
+        trough_idx = trough_zone['channel1'].idxmin()
+        t_trough = file_data.loc[trough_idx, 'time']
+    else:
+        t_trough = t_start
+        
+    # Calculate the rate of change over ~2s to find steep edges vs flats
+    step = max(1, int(2.0 / median_time_step))
+    zone_data['delta'] = zone_data['channel1'].diff(step)
+    
+    # Define a dynamic threshold to separate vertical walls from horizontal flats
+    delta_std = zone_data['delta'].std()
+    edge_threshold = max(0.5, delta_std * 0.3) 
+    
+    # Boolean mask: True if it's a steep edge, False if it's a stable flat
+    is_edge = zone_data['delta'].abs() > edge_threshold
+    is_flat = ~is_edge
+    
+    # Group continuous blocks of flatness
+    flat_groups = (is_flat != is_flat.shift()).cumsum()
+    min_flat_rows = int(5.0 / median_time_step)
+    
+    valid_flats = []
+    for g in flat_groups[is_flat].unique():
+        group_data = zone_data[flat_groups == g]
+        if len(group_data) >= min_flat_rows:
+            valid_flats.append({
+                'start_time': group_data['time'].min(),
+                'end_time': group_data['time'].max(),
+                'mid_time': group_data['time'].median()
+            })
+            
+    # Filter to only keep flats that occur AFTER the initial drop/trough
+    post_trough_flats = [f for f in valid_flats if f['end_time'] > t_trough]
+    
+    # --- BASELINE 1 (-1) ---
+    if len(post_trough_flats) >= 1:
+        # The first stable flat after the initial wash drop
+        # Midpoint safely centers it between the recovery rise and the next event (e.g. regen pulse)
+        t_base1 = post_trough_flats[0]['mid_time']
+    else:
+        t_base1 = t_trough + 15.0 # Safe fallback
+        
+    t_start_win1 = t_base1 - 2.5
+    t_end_win1 = t_base1 + 2.5
+    win_zone1 = file_data[(file_data['time'] >= t_start_win1) & (file_data['time'] <= t_end_win1)]
+    
+    ch1_avg1 = win_zone1['channel1'].mean() if not win_zone1.empty else file_data.loc[pre_drop_idx, 'channel1']
+    ch2_avg1 = win_zone1['channel2'].mean() if not win_zone1.empty else file_data.loc[pre_drop_idx, 'channel2']
+    
+    baselines.append((t_start_win1, t_end_win1, ch1_avg1, ch2_avg1, '-1'))
+    
+    # --- BASELINE 2 (-2) ---
+    if len(post_trough_flats) >= 2:
+        # The absolute last stable flat before the interval ends
+        # Midpoint aligns it on the short flat before the next cycle
+        t_base2 = post_trough_flats[-1]['mid_time']
+    elif len(post_trough_flats) == 1:
+        # If there is no regen pulse and only one massive flat exists, place B2 at the end of it
+        t_base2 = max(t_base1 + 10.0, post_trough_flats[0]['end_time'] - 5.0)
+    else:
+        t_base2 = zone['time'].max() - 5.0 # Safe fallback
+        
+    # Ensure Baseline 2 doesn't accidentally overlap Baseline 1 in extremely short cycles
+    t_base2 = max(t_base2, t_base1 + 10.0)
+    
+    t_start_win2 = t_base2 - 2.5
+    t_end_win2 = t_base2 + 2.5
+    win_zone2 = file_data[(file_data['time'] >= t_start_win2) & (file_data['time'] <= t_end_win2)]
+    
+    ch1_avg2 = win_zone2['channel1'].mean() if not win_zone2.empty else file_data.loc[pre_drop_idx, 'channel1']
+    ch2_avg2 = win_zone2['channel2'].mean() if not win_zone2.empty else file_data.loc[pre_drop_idx, 'channel2']
+    
+    baselines.append((t_start_win2, t_end_win2, ch1_avg2, ch2_avg2, '-2'))
+    
+    return baselines
 
 def calculate_sc_flags(files, save_dir='Standard Curve Files'):
     '''Calculates dynamic baseline and peak flags from sensorgram data, saves them to a CSV, updates the dictionary, and optionally plots the results.
@@ -3128,10 +2160,22 @@ def calculate_sc_flags(files, save_dir='Standard Curve Files'):
         for file in list(files[folder].keys()):
 
             if 'sensorgram' in file:
-
+                
                 file_data = files[folder][file].sort_values('time').reset_index(drop=True)
                 previous_file_data = files[folder][previous_file].sort_values('time').reset_index(drop=True)
 
+                # Normalise injection
+                file_data['channel1_raw'] = file_data['channel1']
+                file_data['channel2_raw'] = file_data['channel2']
+                
+                ch1_initial = file_data['channel1'].iloc[0]
+                ch2_initial = file_data['channel2'].iloc[0]
+                
+                file_data['channel1'] = file_data['channel1'] - ch1_initial
+                file_data['channel2'] = file_data['channel2'] - ch2_initial
+
+                files[folder][file] = file_data
+                
                 # Calculates the median time step to define window row counts
                 median_time_step = file_data['time'].diff().median()
                 lookahead_rows = max(1, int(5 / median_time_step))
@@ -3157,9 +2201,7 @@ def calculate_sc_flags(files, save_dir='Standard Curve Files'):
                 cycle_lengths = [t_end - t_start for (t_start, t_end, m1, m2) in intervals if m2 != 'Final']
                 max_standard_cycle = max(cycle_lengths) if cycle_lengths else 600.0
                 
-                # =========================================================================
-                # GLOBAL DROP CALCULATION (Spike-Proofed Edge Detection)
-                # =========================================================================
+                # GLOBAL DROP CALCULATION
                 avg_win = max(1, int(5.0 / median_time_step))
                 
                 # Trailing average (looks backwards 5s)
@@ -3205,27 +2247,14 @@ def calculate_sc_flags(files, save_dir='Standard Curve Files'):
                     if zone.empty:
                         continue
                         
-                    # =========================================================================
-                    # STEP 1: Find the Absolute Peak (UNTOUCHED)
-                    # =========================================================================
-                    absolute_peak_idx, ch1_abs_val, ch2_abs_val, abs_time_val = calculate_absolute_peak(
-                        file_data, zone, median_time_step, t_start
-                    )
+                    # STEP 1: Find the Absolute Peak
+                    absolute_peak_idx, ch1_abs_val, ch2_abs_val, abs_time_val = calculate_absolute_peak(file_data, zone, median_time_step, t_start)
 
-                    # =========================================================================
-                    # STEP 2: Find the Pre-Drop Peak (Glitch-proofed with delays)
-                    # =========================================================================
-                    pre_drop_idx, ch1_peak_val, ch2_peak_val, peak_time_val = calculate_pre_drop_peak(
-                        file_data, zone, absolute_peak_idx, global_drop_size, 
-                        median_time_step, t_start, t_end, meas_1, meas_2, max_standard_cycle
-                    )
+                    # STEP 2: Find the Pre-Drop Peak
+                    pre_drop_idx, ch1_peak_val, ch2_peak_val, peak_time_val = calculate_pre_drop_peak(file_data, zone, absolute_peak_idx, global_drop_size, median_time_step, t_start, t_end, meas_1, meas_2, max_standard_cycle)
 
-                    # =========================================================================
-                    # STEP 3: Baseline Targeting (anchored to the pre-drop peak)
-                    # =========================================================================
-                    t_start_win, t_end_win, ch1_win_avg, ch2_win_avg = calculate_baseline(
-                        file_data, zone, pre_drop_idx, total_block_rows, tail_sample_offset, lookahead_rows
-                    )
+                    # STEP 3: Baseline Targeting
+                    '''t_start_win, t_end_win, ch1_win_avg, ch2_win_avg = calculate_baseline(file_data, zone, pre_drop_idx, total_block_rows, tail_sample_offset, lookahead_rows)
                     
                     # Stores the calculated baseline and both peak metrics into the row collection
                     saved_file_rows.append({
@@ -3240,7 +2269,25 @@ def calculate_sc_flags(files, save_dir='Standard Curve Files'):
                         'ch1_peak': ch1_peak_val,
                         'ch2_peak': ch2_peak_val,
                         'peak_time': peak_time_val
-                    })
+                    })'''
+
+                    baselines = calculate_baselines(file_data, zone, pre_drop_idx, median_time_step)
+                    
+                    # Store both calculated baselines into the row collection
+                    for t_start_win, t_end_win, ch1_win_avg, ch2_win_avg, suffix in baselines:
+                        saved_file_rows.append({
+                            'Window_Start': t_start_win,
+                            'Window_End': t_end_win,
+                            'information': f'Baseline Window {suffix} ({meas_1} / {meas_2})',
+                            'ch1_avg': ch1_win_avg,
+                            'ch2_avg': ch2_win_avg,
+                            'ch1_absolute_peak': ch1_abs_val,
+                            'ch2_absolute_peak': ch2_abs_val,
+                            'absolute_peak_time': abs_time_val,
+                            'ch1_peak': ch1_peak_val,
+                            'ch2_peak': ch2_peak_val,
+                            'peak_time': peak_time_val
+                        })
                     
                 t_absolute_last = file_data['time'].max()
                 t_start_final = t_absolute_last - 5.0
@@ -3369,7 +2416,7 @@ def plot_baselines_and_peaks(file_data, previous_file_data, baseline_flags, titl
 
     # Configures the layout and styling of the Plotly figure
     fig.update_layout(
-        title=title,
+        title=title + ' (Normalised to Initial Baseline)',
         xaxis_title='Time (Seconds)',
         yaxis_title='Response Units (RU)',
         yaxis=dict(range=[file_data['channel1'][0] - 0.5, file_data['channel1'].max() + 0.5]),
