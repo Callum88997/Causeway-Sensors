@@ -18,7 +18,7 @@ from scipy.stats import linregress
 
 from scripts.setup_functions import collapsible_output
 
-def detect_anomalies(df, feature_cols, contamination=0.005):
+"""def detect_anomalies(df, feature_cols, contamination=0.01):
     '''Applies an Isolation Forest to detect multivariate outliers robustly.
     Evaluates each inferred stage independently to prevent score dilution.
     If a chip is anomalous in ANY single stage, it is flagged as an outlier.
@@ -33,15 +33,6 @@ def detect_anomalies(df, feature_cols, contamination=0.005):
     '''
 
     df_clean = df.copy()
-
-    target = 'B72604R8035' 
-    if target in df_clean.index: # If 065 is a chip_id (index after pivot)
-        print(f"DEBUG: Chip {target} entered anomaly detection with shape {df_clean.loc[[target]].shape}")
-
-        display(df_clean)
-
-    elif any(target in str(col) for col in df_clean.columns): # If 065 is a stage (column after pivot)
-        print(f"DEBUG: Stage {target} is present in columns. NaNs in stage: {df_clean.filter(like=target).isna().sum().sum()}")
 
     # Initialise trackers for all chips
     worst_scores = pd.Series(index=df_clean.index, data=np.inf)
@@ -74,7 +65,7 @@ def detect_anomalies(df, feature_cols, contamination=0.005):
         iso = IsolationForest(n_estimators=100, contamination=contamination, random_state=8030, n_jobs=-1)
         preds = iso.fit_predict(X_scaled)
         scores = iso.decision_function(X_scaled)
-        
+
         # Keep the lowest (most anomalous) score for each chip
         current_scores = pd.Series(scores, index=df_stage.index)
         current_preds = pd.Series(preds, index=df_stage.index)
@@ -87,6 +78,98 @@ def detect_anomalies(df, feature_cols, contamination=0.005):
     worst_scores.replace(np.inf, 0.0, inplace=True)
     
     df_clean['anomaly'] = is_anomaly
+    df_clean['anomaly_score'] = worst_scores
+
+    return df_clean
+"""
+
+def detect_anomalies(df, feature_cols, contamination=0.05):
+    '''Applies an Isolation Forest to detect multivariate outliers robustly.
+    Evaluates each inferred stage independently.
+    A chip fails if: 
+      1. It is anomalous in >= 2 consecutive stages.
+      2. It fails the VERY LAST stage.
+      3. It has missing data (NaNs).
+    '''
+    df_clean = df.copy()
+
+    # Initialise trackers
+    worst_scores = pd.Series(index=df_clean.index, data=np.inf)
+    
+    # Master flag for NaN dropouts and final stage failures
+    hard_fail = pd.Series(index=df_clean.index, data=1)
+    failed_final_stage = pd.Series(index=df_clean.index, data=0)
+    
+    # Trackers for consecutive failures
+    current_streak = pd.Series(index=df_clean.index, data=0)
+    max_streak = pd.Series(index=df_clean.index, data=0)
+
+    # Group columns dynamically (preserves chronological order of feature_cols)
+    stage_groups = {}
+    for col in feature_cols:
+        stage = str(col).rsplit('_', 1)[0]
+        if stage not in stage_groups:
+            stage_groups[stage] = []
+        stage_groups[stage].append(col)
+
+    # Identify the name of the final stage
+    final_stage_name = list(stage_groups.keys())[-1]
+
+    # Loop through the pre-grouped dictionary sequentially
+    for stage, stage_cols in stage_groups.items():
+            
+        # 1. Catch missing values (NaNs) and issue a hard fail
+        stage_nans = df_clean[stage_cols].isna().any(axis=1)
+        nan_chips = stage_nans[stage_nans].index
+        
+        if len(nan_chips) > 0:
+            hard_fail.loc[nan_chips] = -1
+            worst_scores.loc[nan_chips] = -999.0
+            
+        df_stage = df_clean[stage_cols].dropna()
+        
+        if df_stage.empty or len(df_stage) < 2:
+            continue
+
+        scaler = RobustScaler()
+        X_scaled = scaler.fit_transform(df_stage)
+        
+        iso = IsolationForest(n_estimators=100, contamination=contamination, random_state=8030, n_jobs=-1)
+        preds = iso.fit_predict(X_scaled)
+        scores = iso.decision_function(X_scaled)
+
+        current_scores = pd.Series(scores, index=df_stage.index)
+        current_preds = pd.Series(preds, index=df_stage.index)
+        
+        # Keep the lowest (most anomalous) score for each chip
+        worst_scores.loc[df_stage.index] = np.minimum(worst_scores.loc[df_stage.index], current_scores)
+        
+        # 2. Track consecutive failures ("multiple in a row")
+        failed_mask = (current_preds == -1)
+        
+        # Increment streak if it failed this stage
+        current_streak.loc[df_stage.index[failed_mask]] += 1
+        
+        # Reset streak to 0 if it passed this stage
+        current_streak.loc[df_stage.index[~failed_mask]] = 0
+        
+        # Update the maximum streak recorded for each chip
+        max_streak = np.maximum(max_streak, current_streak)
+        
+        # 3. Check if this is the final stage and flag failures
+        if stage == final_stage_name:
+            failed_final_stage.loc[df_stage.index[failed_mask]] = 1
+            
+    # Clean up the infinite initialization fallback
+    worst_scores.replace(np.inf, 0.0, inplace=True)
+    
+    # 4. Final Verdict: Fail if NaN dropout, max streak >= 2, OR failed the very last stage
+    df_clean['anomaly'] = np.where(
+        (hard_fail == -1) | 
+        (max_streak >= 3) | 
+        (failed_final_stage == 1), 
+        -1, 1
+    )
     df_clean['anomaly_score'] = worst_scores
         
     return df_clean
@@ -229,6 +312,8 @@ def create_wide_intra(intra_df, val_col, keep_metrics=['std', 'slope', 'range', 
     # Dynamically finds all columns that start with the target channel's name
     intra_metrics = [col for col in intra_df.columns if col.startswith(f'{val_col}_') and col.replace(f'{val_col}_', '') in keep_metrics and col not in ['chip_id', 'stage']]
 
+    chronological_stages = intra_df['stage'].unique()
+
     wide_list = []
     
     # Loops through each required metric
@@ -242,9 +327,23 @@ def create_wide_intra(intra_df, val_col, keep_metrics=['std', 'slope', 'range', 
         # Appends the suffix to the wide column names to prevent overlap
         wide_metric.columns = [f'{col}_{metric_suffix}' for col in wide_metric.columns]
         wide_list.append(wide_metric)
+
+    # Concatenates the wide list if it contains data
+    if not wide_list:
+        return pd.DataFrame()
+        
+    wide_df = pd.concat(wide_list, axis=1)
+
+    ordered_columns = []
+    for metric in intra_metrics:
+        metric_suffix = metric.replace(f'{val_col}_', '')
+        for stage in chronological_stages:
+            col_name = f'{stage}_{metric_suffix}'
+            if col_name in wide_df.columns:
+                ordered_columns.append(col_name)
             
     # Concatenates and returns the wide list if it contains data
-    return pd.concat(wide_list, axis=1) if wide_list else pd.DataFrame()
+    return wide_df[ordered_columns]
 
 def get_outlier_chips(anomalies_df):
     '''Extracts unique chip IDs from the anomaly dataframe, handling both standard and MultiIndex.
@@ -1936,12 +2035,7 @@ def fit_dissociation(t, y):
         return None
 
 def plot_kinetic_curves(data, title):
-    '''Plots fitted association and dissociation curves for one experiment.
-
-    Args:
-        data (dict): Kinetic measurements and fitted-model values.
-        title (str): Plot title.
-    '''
+    '''Plots fitted association and dissociation curves for one experiment, grouped by measurement for interactive toggling.'''
 
     # Initialises the Matplotlib figure and axes
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -1979,8 +2073,11 @@ def plot_kinetic_curves(data, title):
             t_raw = assoc_zone['time'] - t0
             y_raw = assoc_zone['response']
             
+        # Defines a unique legend group for this specific measurement to bind the raw data and fits together
+        group_id = str(f['meas_id'])
+            
         # Adds the raw data trace to the Plotly figure
-        fig_plotly.add_trace(go.Scatter(x=t_raw, y=y_raw, mode='lines', line=dict(color=hex_colour, width=1.5), name=f['meas_id']))
+        fig_plotly.add_trace(go.Scatter(x=t_raw, y=y_raw, mode='lines', line=dict(color=hex_colour, width=1.5), name=f['meas_id'], legendgroup=group_id))
         
         # Plots the raw association data on the Matplotlib axes
         ax.plot(assoc_zone['time'] - t0, assoc_zone['response'], color=colour, lw=1.5)
@@ -1996,7 +2093,8 @@ def plot_kinetic_curves(data, title):
             t_fit = assoc_zone['time'].values
             y_fit = assoc_model(t_fit, Req, kobs, R0, RI_a)
 
-            fig_plotly.add_trace(go.Scatter(x=t_fit - t0, y=y_fit, mode='lines', line=dict(color='black', dash='dash', width=1.5), showlegend=False, hoverinfo='skip'))
+            # Adds the fit line to the same legend group, hiding the duplicate legend entry
+            fig_plotly.add_trace(go.Scatter(x=t_fit - t0, y=y_fit, mode='lines', line=dict(color='black', dash='dash', width=1.5), showlegend=False, hoverinfo='skip', legendgroup=group_id))
 
             ax.plot(t_fit - t0, y_fit, '--', color='black', lw=1.2)
 
@@ -2007,7 +2105,8 @@ def plot_kinetic_curves(data, title):
             t_fit_d = dissoc_zone['time'].values
             y_fit_d = dissoc_model(t_fit_d, R0d, kd, Rinf, RI_d)
 
-            fig_plotly.add_trace(go.Scatter(x=t_fit_d - t0, y=y_fit_d, mode='lines', line=dict(color='black', dash='dash', width=1.5), showlegend=False, hoverinfo='skip'))
+            # Adds the fit line to the same legend group, hiding the duplicate legend entry
+            fig_plotly.add_trace(go.Scatter(x=t_fit_d - t0, y=y_fit_d, mode='lines', line=dict(color='black', dash='dash', width=1.5), showlegend=False, hoverinfo='skip', legendgroup=group_id))
 
             ax.plot(t_fit_d - t0, y_fit_d, '--', color='black', lw=1.2)
 
@@ -2300,90 +2399,82 @@ def plot_overall_rates_vs_conc(sc_data, title_prefix):
         plt.tight_layout()
         plt.show()
 
-def run_binding_kinetics_analysis(files):
+def run_binding_kinetics_analysis(files, baseline='- 2'):
     '''Computes binding kinetics (association/dissociation, global ka/kd/KD).
     
     Uses calculated baseline flags to dynamically define fitting windows:
     1. Association: From injection start to the absolute peak.
-    2. Dissociation: From the pre-drop peak to the start of the subsequent baseline window.
+    2. Dissociation: From the pre-drop peak strictly to the specified baseline.
 
     Args:
         files (dict): Processed sensorgram and flag data files.
+        baseline (str): The baseline flag to use for the end of dissociation (default: '- 2').
 
     Returns:
         dict: The updated kinetics results.
     '''
 
-    # Initialises an empty dictionary to store the kinetic analysis results
     kinetics_results = {}
+    
+    # Clean the input target to guarantee matching regardless of spacing (e.g., '- 2' becomes '-2')
+    target_baseline = str(baseline).replace(' ', '')
 
-    # Loops through each folder in the files dictionary
     for folder in files.keys():
 
-        # Skips folders containing baseline flags
         if 'baseline' in folder:
             continue
 
-        # Initialises an empty dictionary for the current folder
         kinetics_results[folder] = {}
         previous_file = ''
 
-        # Loops through each file in the folder
         for file in list(files[folder].keys()):
 
-            # Processes only sensorgram files
             if 'sensorgram' in file:
-
-                # Extracts and sorts the sensorgram and flag data chronologically         
+       
                 sensor = files[folder][file].sort_values('time').reset_index(drop=True)
                 flags = files[folder][previous_file].sort_values('time').reset_index(drop=True)
                 sensor['response'] = sensor['channel1']
 
-                # Gets the corresponding baseline flags to extract dynamic timings
                 file_name_flags = file.split('_')[1] + '_baseline_flags'
                 baseline_flags = files[folder].get(file_name_flags)
                 parsed = []
 
-                # Loops through each row in the flags dataframe to extract concentrations
                 for _, row in flags.iterrows():
                     conc_val = parse_conc_flag(row['conc'])
 
-                    # Appends valid concentration events to the parsed list
                     if conc_val is not None:
                         parsed.append({'time': row['time'], 'conc': conc_val, 'label': str(row['conc'])})
 
                 segments = []
 
-                # Ensures baseline flags are available before attempting to extract timings
                 if baseline_flags is not None:
 
-                    # Loops through each parsed event to delineate segments
+                    # DYNAMIC BASELINE FILTER: Strips spaces from the data to match the cleaned target
+                    info_str = baseline_flags['information'].astype(str).str.replace(' ', '')
+                    target_flags = baseline_flags[info_str.str.contains(target_baseline, na=False)]
+
                     for i, event in enumerate(parsed):
 
                         t_start = event['time']
                         t_next = parsed[i+1]['time'] if i + 1 < len(parsed) else sensor['time'].max()
 
-                        # Matches the event window to the calculated baseline flag timings
-                        valid_flags = baseline_flags[(baseline_flags['absolute_peak_time'] >= t_start) & (baseline_flags['absolute_peak_time'] <= t_next)]
+                        # Matches the event window to the filtered target baseline timings
+                        valid_flags = target_flags[(target_flags['absolute_peak_time'] >= t_start) & (target_flags['absolute_peak_time'] <= t_next)]
                         
                         if valid_flags.empty:
                             continue
                             
                         flag_row = valid_flags.iloc[0]
                         
-                        # Sets association start and end time window
                         t_assoc_start = t_start
                         t_assoc_end = flag_row['absolute_peak_time']
                         
-                        # Sets disociation start and end time window
                         t_dissoc_start = flag_row['peak_time']
                         t_dissoc_end = flag_row['Window_Start']
 
-                        # Skips the segment if any required timings evaluated to NaN
                         if pd.isna(t_assoc_end) or pd.isna(t_dissoc_start) or pd.isna(t_dissoc_end):
                             continue
 
-                        # Appends the calculated segment boundaries
                         segments.append({
                             'conc': event['conc'], 
                             'meas_id': event['label'], 
@@ -2395,30 +2486,24 @@ def run_binding_kinetics_analysis(files):
 
                 fits = []
 
-                # Loops through each evaluated segment to perform curve fitting
                 for seg in segments:
 
-                    # Extracts the specific zones for association and dissociation
                     assoc_zone = sensor[(sensor['time'] >= seg['t_assoc_start']) & (sensor['time'] <= seg['t_assoc_end'])]
                     dissoc_zone = sensor[(sensor['time'] >= seg['t_dissoc_start']) & (sensor['time'] <= seg['t_dissoc_end'])]
 
-                    # Attempts to fit the models if there are sufficient data points
                     assoc_fit = fit_association(assoc_zone['time'].values, assoc_zone['response'].values) if len(assoc_zone) > 5 else None
                     dissoc_fit = fit_dissociation(dissoc_zone['time'].values, dissoc_zone['response'].values) if len(dissoc_zone) > 5 else None
 
-                    # Appends the fit results and zone data
                     fits.append({
                         'conc': seg['conc'], 'meas_id': seg['meas_id'],
                         'assoc_fit': assoc_fit, 'dissoc_fit': dissoc_fit,
                         'assoc_zone': assoc_zone, 'dissoc_zone': dissoc_zone
                     })
 
-                # Compiles the final file data structure
                 file_data = {'sensor': sensor, 'segments': segments, 'fits': fits}
                 concs = [f['conc'] for f in fits if f['assoc_fit'] is not None]
                 kobs_vals = [f['assoc_fit'][1] for f in fits if f['assoc_fit'] is not None]
 
-                # Attempts a linear regression if multiple valid concentrations exist
                 if len(concs) >= 2:
                     slope, intercept, r_value, _, _ = linregress(concs, kobs_vals)
                     ka = slope
@@ -2432,68 +2517,50 @@ def run_binding_kinetics_analysis(files):
 
                     dissoc_kds = [f['dissoc_fit'][1] for f in fits if f['dissoc_fit'] is not None]
 
-                    # Determines the overall dissociation rate from individual fits if available
                     if dissoc_kds:
                         file_data['kd_dissoc_mean'] = np.mean(dissoc_kds)
 
-                # Assigns the compiled data to the kinetics results dictionary
                 kinetics_results[folder][file] = file_data
 
-            # Updates the previous file tracker
             previous_file = file
 
-    # Extracts all individual data dictionaries that contain fits and global rates
     all_global_data = []
 
     for folder, folder_files in kinetics_results.items():
-
         for file, data in folder_files.items():
-
             if 'fits' in data:
                 all_global_data.append(data)
                 
-    # Checks if valid data was found across the analysis
     if all_global_data:
         
         print(f"\n{'='*40}\nOverall Kinetics Distributions\n{'='*40}")
             
-        # Plots the Per-Concentration rate distributions (multiple values per chip grouped by conc)
         with collapsible_output('Overall Distributions by Concentration'):
             plot_overall_rates_vs_conc(all_global_data, 'Overall')
             
-    # Loops through each folder and its assigned files in the kinetics results
     for folder, folder_files in kinetics_results.items():
 
-        # Prints the section header
         print(f"\n{'='*40}\nKinetics Analysis: {folder}\n{'='*40}")
 
         summary_rows = []
 
-        # Loops through each file and its data content
         for file, data in folder_files.items():
-
-            # Appends valid kinetic summaries
             if 'ka' in data:
-
                 summary_rows.append({
                     'File': file, 'k_a (ug/ml*s)^-1': data['ka'], 'k_d_intercept (s^-1)': data['kd'],
                     'k_d_dissoc_mean (s^-1)': data.get('kd_dissoc_mean', np.nan),
                     'K_D (ug/ml)': data['KD'], 'k_obs_fit_R2': data['kobs_r2']
                 })
 
-        # Displays the results in a collapsible output section if data exists
         if summary_rows:
             with collapsible_output(f'Global Kinetics Summary: {folder}'):
                 display(pd.DataFrame(summary_rows))
 
-        # Loops through each file to generate per-concentration details and plots
         for file, data in folder_files.items():
 
-            # Skips files without valid fits
             if 'fits' not in data: 
                 continue
 
-            # Extracts the chip and measurement identifiers from the filename
             clean_filename = file.replace('Copy of ', '').strip()
             parts = clean_filename.split('_')
             chip_id = parts[0] if len(parts) > 0 else 'Unknown'
@@ -2502,44 +2569,35 @@ def run_binding_kinetics_analysis(files):
             print(f'\n--- Chip ID: {chip_id} | Measurement ID: {measurement_id} ---')
             per_conc_rows = []
 
-            # Loops through each generated curve fit
             for f in data['fits']:
 
                 warning = ''
                                 
-                # Unpacks association parameters
                 Req, kobs, R0 = (f['assoc_fit'][0], f['assoc_fit'][1], f['assoc_fit'][2]) if f['assoc_fit'] is not None else (np.nan, np.nan, np.nan)
 
-                # Appends a warning if the association fit failed
                 if f['assoc_fit'] is None: 
                     warning += 'Assoc fit failed; '
                     
-                # Unpacks dissociation parameters
                 R0d, kd, Rinf = (f['dissoc_fit'][0], f['dissoc_fit'][1], f['dissoc_fit'][2]) if f['dissoc_fit'] is not None else (np.nan, np.nan, np.nan)
 
-                # Appends a warning if the dissociation fit failed
                 if f['dissoc_fit'] is None: 
                     warning += 'Dissoc fit failed; '
                     
-                # Extracts standard rates if parameters are viable
                 if not np.isnan(kobs) and not np.isnan(kd) and f['conc'] > 0:
 
                     ka_indiv = (kobs - kd) / f['conc']
                     KD_indiv = kd / ka_indiv if ka_indiv != 0 else np.nan
 
-                    # Appends a warning if a negative ka is inferred
                     if kd >= kobs: 
                         warning += 'kd >= kobs (Negative k_a); '
                 else:
                     ka_indiv, KD_indiv = np.nan, np.nan
                     
-                # Appends the concentration row metrics
                 per_conc_rows.append({
                     'Measurement': f['meas_id'], 'Concentration (ug/ml)': f['conc'], 'k_obs (s^-1)': kobs,
                     'k_d (s^-1)': kd, 'k_a (calc)': ka_indiv, 'K_D': KD_indiv, 'R_eq': Req, 'Warning': warning.strip('; ')
                 })
 
-            # Displays the results in a collapsible output section if concentration rows exist
             if per_conc_rows:
 
                 df_per_conc = pd.DataFrame(per_conc_rows).sort_values(by=['Concentration (ug/ml)', 'Measurement']).reset_index(drop=True)
@@ -2547,16 +2605,13 @@ def run_binding_kinetics_analysis(files):
                 with collapsible_output(f'Per-Concentration Details: {file}'):
                     display(df_per_conc)
 
-            # Displays the kinetic fit curves in a collapsible output section
             with collapsible_output(f'Kinetic Fit Curves: {file}'):
                 plot_kinetic_curves(data, f'Kinetic Curves - {chip_id}')
 
-            # Displays all kinetic parameters against concentration sequentially
             if 'ka' in data:
                 with collapsible_output(f'Rates vs Concentration: {file}'):
                     plot_rates_vs_conc(data, f'Rates vs Concentration - {chip_id}')
 
-            # Displays the aligned binding curves in a collapsible output section
             with collapsible_output(f'Binding Curves: {file}'):
                 plot_binding_curves(data, f'Binding Curves Overlay - {chip_id}')
      

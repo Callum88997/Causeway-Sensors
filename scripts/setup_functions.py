@@ -640,6 +640,8 @@ def update_immob_flags(flag_df, plot_data, file_path=None):
     flag_data = flag_data[flag_data['time'] <= finish_time].copy()
     parsed_flags_df = extract_flags_from_pushes(flag_data)
 
+    has_buffer_3_plateau = 'Buffer 3 - Plateau' in parsed_flags_df['information'].values
+
     # Ensures the last recorded injection has a corresponding Plateau flag
     if not parsed_flags_df.empty:
 
@@ -647,10 +649,13 @@ def update_immob_flags(flag_df, plot_data, file_path=None):
 
         if not str(last_flag).endswith('Plateau'):
 
-            missing_plateau = f"{last_flag} - Plateau"
-            parsed_flags_df = pd.concat([parsed_flags_df, pd.DataFrame([{'time': finish_time, 'information': missing_plateau}])], ignore_index=True)
+            if last_flag.startswith('Buffer'):
+                base_name = last_flag.split(' - ')[0]
+                missing_plateau = f"{base_name} - Plateau"
+            else:
+                missing_plateau = f"{last_flag} - Plateau"
 
-    has_buffer_3_plateau = 'Buffer 3 - Plateau' in parsed_flags_df['information'].values
+            parsed_flags_df = pd.concat([parsed_flags_df, pd.DataFrame([{'time': finish_time, 'information': missing_plateau}])], ignore_index=True)
 
     time_delta = time_array[:-1]
     delta = np.diff(signal)
@@ -920,6 +925,8 @@ def calculate_custom_immob_changes(event_df, channels):
     Returns:
         pd.DataFrame: Dataframe containing custom metrics.
     '''
+
+    event_df = event_df[event_df['stage'] != 'Start'].copy().reset_index(drop=True)
 
     # Creates a copy of the event dataframe to preserve the original data
     df = add_stage_changes(event_df.copy(), channels)
@@ -1365,7 +1372,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
             display(event_df)
 
             # Creates a copy of the change dataframe to preserve the original data
-            change_df = event_df.copy().drop(columns=['chip_id'])
+            change_df = event_df[event_df['stage'] != 'Start'].copy().drop(columns=['chip_id']).reset_index(drop=True)
 
             # Calculates stage changes and initial/final shifts
             change_df = add_stage_changes(change_df, channels)
@@ -2008,47 +2015,8 @@ def calculate_pre_drop_peak(file_data, zone, absolute_peak_idx, global_drop_size
     
     return pre_drop_idx, pre_drop_row['channel1'], pre_drop_row['channel2'], pre_drop_row['time']
 
-"""def calculate_baseline(file_data, zone, pre_drop_idx, total_block_rows, tail_sample_offset, lookahead_rows):
-    '''Calculates baseline coordinates and averages anchored to the pre-drop peak.
-    
-    Args:
-        file_data (pd.DataFrame): The complete raw sensorgram dataframe.
-        zone (pd.DataFrame): The dataframe restricted to the current interval.
-        pre_drop_idx (int): The dataframe index of the previously found pre-drop peak.
-        total_block_rows (int): The row count representing a full calculation block.
-        tail_sample_offset (int): The offset row count representing the tail boundary.
-        lookahead_rows (int): Minimum rows required to look ahead.
-        
-    Returns:
-        tuple: (t_start_win, t_end_win, ch1_win_avg, ch2_win_avg)
-    '''
-
-    max_zone_idx = zone.index.max()
-
-    # Determines the target baseline index by stepping forward from the pre-drop peak
-    target_baseline_idx = pre_drop_idx + total_block_rows - tail_sample_offset
-
-    if target_baseline_idx > max_zone_idx:
-        target_baseline_idx = max(pre_drop_idx + lookahead_rows, max_zone_idx - tail_sample_offset)
-    
-    target_baseline_idx = max(pre_drop_idx, min(target_baseline_idx, max_zone_idx))
-    baseline_row = file_data.loc[target_baseline_idx]
-
-    t_base = baseline_row['time']
-    t_start_win = t_base - 2.5
-    t_end_win = t_base + 2.5
-    
-    # Isolates the five-second window zone centred around the target baseline time
-    win_zone = file_data[(file_data['time'] >= t_start_win) & (file_data['time'] <= t_end_win)]
-    
-    ch1_win_avg = win_zone['channel1'].mean() if not win_zone.empty else baseline_row['channel1']
-    ch2_win_avg = win_zone['channel2'].mean() if not win_zone.empty else baseline_row['channel2']
-    
-    return t_start_win, t_end_win, ch1_win_avg, ch2_win_avg
-"""
-
 def calculate_baselines(file_data, zone, pre_drop_idx, median_time_step):
-    '''Calculates Baseline 1 and 2, utilizing robust variance filtering to absolutely prevent slope clipping.'''
+    '''Calculates Baseline 1 via dynamic shifting and Baseline 2 via pre-slope truncation, extracting the exact point values.'''
     
     baselines = []
     
@@ -2058,11 +2026,10 @@ def calculate_baselines(file_data, zone, pre_drop_idx, median_time_step):
     # Establish a hard boundary halfway between the pre-drop peak and the next flag
     t_search_limit = t_pre_drop + (t_zone_end - t_pre_drop) / 2.0
     
-    # --- BASELINE 1 (-1) STRICT 30-SECOND LOGIC WITH DYNAMIC SHIFT (UNTOUCHED) ---
+    # --- BASELINE 1 (-1) STRICT 30-SECOND LOGIC WITH DYNAMIC SHIFT ---
     
     t_b1_limit = min(t_search_limit, t_pre_drop + 30.0)
     
-    # Isolate data strictly within this restricted first-half window
     zone_data = file_data[(file_data['time'] >= t_pre_drop) & (file_data['time'] <= t_search_limit)].copy()
     
     if zone_data.empty:
@@ -2099,7 +2066,6 @@ def calculate_baselines(file_data, zone, pre_drop_idx, median_time_step):
     else:
         t_base1 = t_min + 5.0
         
-    # Prepare the derivative data to check for slope clipping
     smooth_win = max(1, int(2.0 / median_time_step))
     smoothed_signal = zone_data['channel1'].rolling(window=smooth_win, center=True, min_periods=1).mean()
     step = max(1, int(2.0 / median_time_step))
@@ -2108,8 +2074,7 @@ def calculate_baselines(file_data, zone, pre_drop_idx, median_time_step):
     b1_zone = zone_data[zone_data['time'] <= t_b1_limit]
     b1_edge_threshold = max(0.5, b1_zone['delta'].std() * 0.3)
     
-    # Nudge the 5s window away from the edges if it clips a slope
-    for _ in range(4): # Allow up to 4 shifts
+    for _ in range(4): 
         t_start_check = t_base1 - 2.5
         t_end_check = t_base1 + 2.5
         check_zone = zone_data[(zone_data['time'] >= t_start_check) & (zone_data['time'] <= t_end_check)]
@@ -2117,84 +2082,77 @@ def calculate_baselines(file_data, zone, pre_drop_idx, median_time_step):
         if check_zone.empty:
             break
             
-        # If clipping the drop on the right (steep decrease), shift Left by 1s
         if check_zone['delta'].min() < -b1_edge_threshold:
             t_base1 -= 1.0
-        # If clipping the rise on the left (steep increase), shift Right by 1s
         elif check_zone['delta'].max() > b1_edge_threshold:
             t_base1 += 1.0
         else:
-            break # Window is entirely stable and flat
+            break 
             
-    # Failsafe: Force the baseline to remain safely inside the 30s boundary
     t_base1 = min(t_base1, t_b1_limit - 2.5)
         
-    t_start_win1 = t_base1 - 2.5
-    t_end_win1 = t_base1 + 2.5
-    win_zone1 = file_data[(file_data['time'] >= t_start_win1) & (file_data['time'] <= t_end_win1)]
+    # --- EXACT POINT EXTRACTION FOR BASELINE 1 ---
+    t_start_win1 = t_base1
+    t_end_win1 = t_base1
     
-    ch1_avg1 = win_zone1['channel1'].mean() if not win_zone1.empty else file_data.loc[pre_drop_idx, 'channel1']
-    ch2_avg1 = win_zone1['channel2'].mean() if not win_zone1.empty else file_data.loc[pre_drop_idx, 'channel2']
+    exact_idx1 = (file_data['time'] - t_base1).abs().idxmin()
+    ch1_val1 = file_data.loc[exact_idx1, 'channel1']
+    ch2_val1 = file_data.loc[exact_idx1, 'channel2']
     
-    baselines.append((t_start_win1, t_end_win1, ch1_avg1, ch2_avg1, '- 1'))
+    baselines.append((t_start_win1, t_end_win1, ch1_val1, ch2_val1, '- 1'))
+
+    # --- BASELINE 2 (-2) PRE-SLOPE TRUNCATION & HEIGHT FILTER ---
     
-    # --- BASELINE 2 (-2) NOISE-AWARE VARIANCE FILTERING ---
+    t_b2_search_start = t_base1 + 10.0
+    t_b2_search_end = t_zone_end - 3.0 
     
-    # Define the isolated search area for B2: Safely after B1, up to the halfway limit
-    t_b2_search_start = t_base1 + 15.0
-    t_b2_search_end = t_search_limit
+    b2_full_zone = file_data[(file_data['time'] >= t_b2_search_start) & (file_data['time'] <= t_b2_search_end)].copy()
     
-    b2_zone = zone_data[(zone_data['time'] >= t_b2_search_start) & (zone_data['time'] <= t_b2_search_end)]
+    step_size = max(1, int(2.0 / median_time_step))
+    smooth_win_b2 = max(1, int(2.0 / median_time_step))
+    b2_full_zone['delta'] = b2_full_zone['channel1'].rolling(window=smooth_win_b2, center=True, min_periods=1).mean().diff(step_size)
     
-    if len(b2_zone) > 5:
-        # Match the rolling window to the exact 5-second output width
+    edge_thresh = max(0.5, b2_full_zone['delta'].std() * 0.3)
+    
+    valid_edges = b2_full_zone[(b2_full_zone['delta'].abs() > edge_thresh) & (b2_full_zone['time'] > t_b2_search_start + 5.0)]
+    
+    if not valid_edges.empty:
+        t_next_slope = valid_edges['time'].min()
+        b2_zone = b2_full_zone[b2_full_zone['time'] < t_next_slope]
+    else:
+        b2_zone = b2_full_zone
+        
+    if len(b2_zone) > int(5.0 / median_time_step):
         rolling_win_5s = max(1, int(5.0 / median_time_step))
-        b2_roll_std = b2_zone['channel1'].rolling(window=rolling_win_5s, center=True, min_periods=1).std()
         
-        # Calculate a dynamic noise threshold strictly for this late zone
-        b2_median_std = b2_roll_std.median()
+        b2_mean = b2_zone['channel1'].rolling(window=rolling_win_5s, center=True, min_periods=1).mean()
+        b2_std = b2_zone['channel1'].rolling(window=rolling_win_5s, center=True, min_periods=1).std()
         
-        # Boolean mask: True only if the 5s window is exceptionally flat (rejects slopes)
-        is_b2_flat = b2_roll_std <= b2_median_std
+        max_allowed_height = ch1_val1 + 5.0 
         
-        # Group the contiguous flat regions
-        b2_flat_groups = (is_b2_flat != is_b2_flat.shift()).cumsum()
+        valid_mask = (b2_mean < max_allowed_height) & b2_std.notna()
         
-        valid_b2_flats = []
-        min_flat_rows = int(3.5 / median_time_step)
-        
-        for g in b2_flat_groups[is_b2_flat].unique():
-            group_data = b2_zone[b2_flat_groups == g]
-            if len(group_data) >= min_flat_rows:
-                valid_b2_flats.append(group_data)
-                
-        if len(valid_b2_flats) >= 1:
-            # Grab the LAST stable flat region before the interval cuts off
-            last_b2_flat = valid_b2_flats[-1]
-            
-            # Within this last plateau, locate the absolute lowest variance 
-            # to guarantee the 5s window avoids both the left and right slopes
-            best_idx_b2 = b2_roll_std.loc[last_b2_flat.index].idxmin()
+        if valid_mask.any():
+            best_idx_b2 = b2_std[valid_mask].idxmin()
             t_base2 = file_data.loc[best_idx_b2, 'time']
         else:
-            # Fallback to the flattest single point in the entire B2 search zone
-            best_idx_b2 = b2_roll_std.idxmin()
-            t_base2 = file_data.loc[best_idx_b2, 'time'] if pd.notna(best_idx_b2) else t_b2_search_end - 5.0
+            best_idx_b2 = b2_std.idxmin()
+            t_base2 = file_data.loc[best_idx_b2, 'time']
     else:
-        t_base2 = t_search_limit - 5.0
+        t_base2 = t_b2_search_start + 2.5
         
-    # Ensure Baseline 2 doesn't accidentally overlap B1 or exceed the search limit
-    t_base2 = max(t_base2, t_base1 + 15.0)
-    t_base2 = min(t_base2, t_search_limit - 2.5)
+    t_base2 = max(t_base2, t_base1 + 10.0)
+    t_base2 = min(t_base2, t_zone_end - 2.5)
     
-    t_start_win2 = t_base2 - 2.5
-    t_end_win2 = t_base2 + 2.5
-    win_zone2 = file_data[(file_data['time'] >= t_start_win2) & (file_data['time'] <= t_end_win2)]
+    # --- EXACT POINT EXTRACTION FOR BASELINE 2 ---
+    t_start_win2 = t_base2
+    t_end_win2 = t_base2
     
-    ch1_avg2 = win_zone2['channel1'].mean() if not win_zone2.empty else file_data.loc[pre_drop_idx, 'channel1']
-    ch2_avg2 = win_zone2['channel2'].mean() if not win_zone2.empty else file_data.loc[pre_drop_idx, 'channel2']
+    exact_idx2 = (file_data['time'] - t_base2).abs().idxmin()
+    ch1_val2 = file_data.loc[exact_idx2, 'channel1']
+    ch2_val2 = file_data.loc[exact_idx2, 'channel2']
     
-    baselines.append((t_start_win2, t_end_win2, ch1_avg2, ch2_avg2, '- 2'))
+    baselines.append((t_start_win2, t_end_win2, ch1_val2, ch2_val2, '- 2'))
     
     return baselines
 
@@ -2492,7 +2450,7 @@ def calculate_and_plot_shift(shift_data, title):
     '''
 
     # Creates a copy of the shift data to preserve the original data
-    shift_data = shift_data[~shift_data['information'].astype(str).str.contains('-1')].reset_index(drop=True)
+    shift_data = shift_data[~shift_data['information'].astype(str).str.contains('- 1')].reset_index(drop=True)
     initial_baseline = shift_data['ch1_avg'].iloc[0]
 
     # Calculates absolute baseline shifts and percentage of peak response
@@ -2510,7 +2468,7 @@ def calculate_and_plot_shift(shift_data, title):
     summary_table = shift_data[summary_cols].copy()
     
     # Standardises the summary table column names
-    summary_table.columns = ['Measurement Step', 'Absolute Peak (RU)', 'Absolute Baseline (RU)', 'Baseline Shift (ΔRU)', '% Shift of Peak']
+    summary_table.columns = ['Measurement Step', 'Pre-Drop Peak (RU)', 'Absolute Baseline (RU)', 'Baseline Shift (ΔRU)', '% Shift of Peak']
     summary_table = summary_table.round(3)
     
     # Initialises the plot with twin y-axes
@@ -2541,3 +2499,69 @@ def calculate_and_plot_shift(shift_data, title):
 
     # Display the summary table
     display(summary_table)
+
+def analyse_standard_curves_extra(files, save_dir='Standard Curve Files'):
+    '''Iterates over the processed files dictionary, generating and displaying all requested outputs neatly inside collapsible UI widgets.'''
+
+    files = calculate_sc_flags(files, save_dir)
+
+    # Loops through each folder in the files dictionary
+    for folder in files.keys():
+
+        print(f'\nEvaluating Folder: {folder}')
+        
+        previous_file = ''
+
+        # Loops through each file in the folder
+        for file in list(files[folder].keys()):
+
+            # Cleans the filename and extracts chip and measurement IDs
+            clean_filename = file.replace('Copy of ', '').strip()
+            parts = clean_filename.split('_')
+            chip_id = parts[0] if len(parts) > 0 else 'Unknown'
+            measurement_id = parts[1] if len(parts) > 1 else 'Unknown'
+
+            if 'sensorgram' in file:
+
+                print(f'\n--- Chip ID: {chip_id} | Measurement ID: {measurement_id} ---')
+
+                file_data = files[folder][file]
+                previous_file_data = files[folder].get(previous_file, None)
+                
+                # Create a specific subset for plotting to avoid rendering raw channels
+                plot_data = file_data[['time', 'channel1', 'channel2']]
+
+                # Display the basic sensorgram plot using the subset
+                with collapsible_output(f'Basic Sensorgram: {file}'):
+                    plot_sensorgrams({file: plot_data}, 'Standard Curve')
+                
+                # Checks whether the dataframe contains data
+                if previous_file_data is not None and not previous_file_data.empty:
+                    
+                    with collapsible_output(f'Sensorgram with Flags: {file}'):
+
+                        times = previous_file_data['time'].tolist()
+                        labels = previous_file_data['conc'].tolist()
+                        title = f'Standard Curve Sensorgram for {file}'
+                        colours = ['tab:blue'] * len(times)
+                        
+                        # Display the flags on the sensorgram using the subset
+                        plot_flags_on_sensorgrams(plot_data, times, labels, title, colours)
+
+                file_name_flags = file.split('_')[1] + '_baseline_flags'
+
+                if file_name_flags in files[folder]:
+
+                    baseline_flags = files[folder][file_name_flags]
+
+                    # Display the baselines and peaks plot (Full data passed in case raw is needed for math)
+                    with collapsible_output(f'Baseline & Peak Tail-Sampling: {file}'):
+                        plot_baselines_and_peaks(file_data, previous_file_data, baseline_flags, f'Tail-Sampling Window Method with Peaks - {file}')
+
+                    # Display the calculated baseline shift plots
+                    with collapsible_output(f'Baseline Shift Analysis: {file}'):
+                        calculate_and_plot_shift(baseline_flags, file)
+
+            previous_file = file
+
+    return files
