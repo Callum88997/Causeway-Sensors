@@ -83,7 +83,9 @@ from scripts.setup_functions import collapsible_output
     return df_clean
 """
 
-def detect_anomalies(df, feature_cols, contamination=0.05):
+
+
+def detect_anomalies(df, feature_cols, contamination=0.1):
     '''Applies an Isolation Forest to detect multivariate outliers robustly.
     Evaluates each inferred stage independently.
     A chip fails if: 
@@ -173,6 +175,44 @@ def detect_anomalies(df, feature_cols, contamination=0.05):
     df_clean['anomaly_score'] = worst_scores
         
     return df_clean
+
+
+
+"""def detect_anomalies(df, feature_cols, contamination='auto'): # 0.07
+    '''Applies an Isolation Forest to detect multivariate outliers.
+
+    Args:
+        df (pd.DataFrame): The dataframe to analyse.
+        feature_cols (list[str]): The list of feature columns to evaluate.
+        contamination (str | float, optional): The proportion of outliers in the data. Defaults to 'auto'.
+
+    Returns:
+        pd.DataFrame: The dataframe with 'anomaly' (-1 for outlier, 1 for inlier) and 'anomaly_score' columns.
+    '''
+
+    # Creates a copy of the clean dataframe to preserve the original data
+    df_clean = df.dropna(subset=feature_cols).copy()
+    
+    # Checks whether the dataframe contains data
+    if df_clean.empty or len(df_clean) < 2:
+
+        df_clean['anomaly'] = 1
+        df_clean['anomaly_score'] = 0.0
+
+        return df_clean
+    
+    # Initialises the scaler and standardises the features
+    scaler = RobustScaler()
+    X_scaled = scaler.fit_transform(df_clean[feature_cols])
+    
+    # Initialises and fits the Isolation Forest model
+    iso = IsolationForest(n_estimators=500, contamination=contamination, random_state=8030)
+
+    df_clean['anomaly'] = iso.fit_predict(X_scaled)
+    df_clean['anomaly_score'] = iso.decision_function(X_scaled)
+    
+    return df_clean
+"""
 
 def pivot_chip_data(df, stage_col, val_col):
     '''Pivots data for anomaly detection.
