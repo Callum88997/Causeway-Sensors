@@ -10,11 +10,14 @@ from IPython.display import display
 import re
 from scipy.optimize import curve_fit
 
-from sklearn.preprocessing import RobustScaler
+from sklearn.preprocessing import RobustScaler, MinMaxScaler
 from sklearn.ensemble import IsolationForest
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from scipy.stats import linregress
+
+from sklearn.neighbors import LocalOutlierFactor
+from sklearn.svm import OneClassSVM
 
 from scripts.setup_functions import collapsible_output
 
@@ -85,7 +88,7 @@ from scripts.setup_functions import collapsible_output
 
 
 
-def detect_anomalies(df, feature_cols, contamination=0.1):
+"""def detect_anomalies(df, feature_cols, contamination=0.1):
     '''Applies an Isolation Forest to detect multivariate outliers robustly.
     Evaluates each inferred stage independently.
     A chip fails if: 
@@ -175,7 +178,7 @@ def detect_anomalies(df, feature_cols, contamination=0.1):
     df_clean['anomaly_score'] = worst_scores
         
     return df_clean
-
+"""
 
 
 """def detect_anomalies(df, feature_cols, contamination='auto'): # 0.07
@@ -213,6 +216,63 @@ def detect_anomalies(df, feature_cols, contamination=0.1):
     
     return df_clean
 """
+
+
+def detect_anomalies(df, feature_cols, contamination=0.01):
+    '''Applies an Isolation Forest to detect multivariate outliers robustly.
+    Evaluates each inferred stage independently.
+    
+    Returns:
+        tuple: (annotated_df, stage_flags_df)
+        - stage_flags_df contains a 1 if the chip failed that specific stage, else 0.
+    '''
+    df_clean = df.copy()
+
+    worst_scores = pd.Series(index=df_clean.index, data=np.inf)
+    is_anomaly = pd.Series(index=df_clean.index, data=1)
+
+    # Group columns dynamically
+    stage_groups = {}
+    for col in feature_cols:
+        stage = str(col).rsplit('_', 1)[0]
+        if stage not in stage_groups:
+            stage_groups[stage] = []
+        stage_groups[stage].append(col)
+
+    # Tracker matrix to hold stage-level failure flags (1 = anomaly, 0 = normal)
+    stage_flags = pd.DataFrame(0, index=df_clean.index, columns=list(stage_groups.keys()))
+
+    for stage, stage_cols in stage_groups.items():
+            
+        df_stage = df_clean[stage_cols].dropna()
+        
+        if df_stage.empty or len(df_stage) < 2:
+            continue
+
+        scaler = RobustScaler()
+        X_scaled = scaler.fit_transform(df_stage)
+        
+        iso = IsolationForest(n_estimators=100, contamination=contamination, random_state=8030, n_jobs=-1)
+        preds = iso.fit_predict(X_scaled)
+        scores = iso.decision_function(X_scaled)
+
+        current_scores = pd.Series(scores, index=df_stage.index)
+        current_preds = pd.Series(preds, index=df_stage.index)
+        
+        worst_scores.loc[df_stage.index] = np.minimum(worst_scores.loc[df_stage.index], current_scores)
+        is_anomaly.loc[df_stage.index] = np.minimum(is_anomaly.loc[df_stage.index], current_preds)
+        
+        # Record the specific chips that failed THIS stage
+        failed_chips = df_stage.index[current_preds == -1]
+        stage_flags.loc[failed_chips, stage] = 1
+        
+    worst_scores.replace(np.inf, 0.0, inplace=True)
+    
+    df_clean['anomaly'] = is_anomaly
+    df_clean['anomaly_score'] = worst_scores
+
+    # Return the clean dataframe AND the matrix of stage-by-stage failures
+    return df_clean, stage_flags
 
 def pivot_chip_data(df, stage_col, val_col):
     '''Pivots data for anomaly detection.
@@ -436,7 +496,7 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
     wide_changes = pivot_chip_data(changes_df, 'stage', change_col)
     wide_intra = create_wide_intra(intra_df, intra_target)
 
-    # Detects absolute signal anomalies
+    """# Detects absolute signal anomalies
     anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist())
     outliers_abs = get_outlier_chips(anomalies_abs)
 
@@ -446,7 +506,33 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
 
     # Detects intra-stage kinetic anomalies
     anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
+    outliers_intra = get_outlier_chips(anomalies_intra)"""
+
+
+    anomalies_abs, flags_abs = detect_anomalies(wide_events, wide_events.columns.tolist())
+    outliers_abs = get_outlier_chips(anomalies_abs)
+
+    anomalies_delta, flags_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist())
+    outliers_delta = get_outlier_chips(anomalies_delta)
+
+    anomalies_intra, flags_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
     outliers_intra = get_outlier_chips(anomalies_intra)
+
+
+    common_stages = flags_abs.columns.intersection(flags_delta.columns).intersection(flags_intra.columns)
+    
+    # 2. Add the matrices together safely (0 to 3 votes per stage per chip)
+    stage_votes = (
+        flags_abs[common_stages]
+        .add(flags_delta[common_stages], fill_value=0)
+        .add(flags_intra[common_stages], fill_value=0)
+    )
+    
+    # 3. A chip fails the ensemble if it gets >= 2 votes in ANY single stage
+    ensemble_failed_chips = stage_votes[stage_votes >= 2].dropna(how='all').index.tolist()
+    
+    print(f"\nFinal Ensemble Failures (Failed >= 2 datasets in the same stage): {len(ensemble_failed_chips)}")
+
 
     # Displays the results in a collapsible output section
     with collapsible_output(f'{title} - Absolute Signal'):
@@ -490,7 +576,8 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
         print(f'\nPotential Anomalous Chips (Intra-stage Kinetics): {len(outliers_intra)}')
         analyse_anomaly_drivers(wide_intra, anomalies_intra, f'PEL {intra_target} Intra-stage Kinetics')
 
-    return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra
+    return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra, ensemble_failed_chips
+
 
 def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='channel1', change_col='channel1_change', intra_val_col=None, title='Immobilisation Analysis'):
     '''Analyses one immobilisation split across signal, delta, and kinetic features.
@@ -521,17 +608,31 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
     wide_intra = create_wide_intra(intra_df, intra_target)
 
     # Detects absolute signal anomalies
-    anomalies_abs = detect_anomalies(wide_events, wide_events.columns.tolist())
+    anomalies_abs, flags_abs = detect_anomalies(wide_events, wide_events.columns.tolist())
     outliers_abs = get_outlier_chips(anomalies_abs)
 
     # Detects stage delta anomalies
-    anomalies_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist())
+    anomalies_delta, flags_delta = detect_anomalies(wide_changes, wide_changes.columns.tolist())
     outliers_delta = get_outlier_chips(anomalies_delta)
 
     # Detects intra-stage kinetic anomalies
-    anomalies_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
+    anomalies_intra, flags_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
     outliers_intra = get_outlier_chips(anomalies_intra)
 
+    common_stages = flags_abs.columns.intersection(flags_delta.columns).intersection(flags_intra.columns)
+    
+    # 2. Add the matrices together safely (0 to 3 votes per stage per chip)
+    stage_votes = (
+        flags_abs[common_stages]
+        .add(flags_delta[common_stages], fill_value=0)
+        .add(flags_intra[common_stages], fill_value=0)
+    )
+    
+    # 3. A chip fails the ensemble if it gets >= 2 votes in ANY single stage
+    ensemble_failed_chips = stage_votes[stage_votes >= 2].dropna(how='all').index.tolist()
+    
+    print(f"\nFinal Ensemble Failures (Failed >= 2 datasets in the same stage): {len(ensemble_failed_chips)}")
+    
     # Displays the results in a collapsible output section
     with collapsible_output(f'{title} - Absolute Signal'):
 
@@ -572,7 +673,15 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
         print(f'\nPotential Anomalous Chips (Intra-stage Kinetics): {len(outliers_intra)}')
         analyse_anomaly_drivers(wide_intra, anomalies_intra, f'Immob [{split_name}] {intra_target} Intra-stage Kinetics')
     
-    return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra
+    return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra, ensemble_failed_chips
+
+
+
+
+
+
+
+
 
 def plot_pel_layer_shifts(change_wide_df, channel_name='quad_ch1'):
     '''Plots PEL signal shifts between layers for each requested channel.
