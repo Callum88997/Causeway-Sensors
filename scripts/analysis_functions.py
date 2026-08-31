@@ -16,9 +16,6 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from scipy.stats import linregress
 
-from sklearn.neighbors import LocalOutlierFactor
-from sklearn.svm import OneClassSVM
-
 from scripts.setup_functions import collapsible_output
 
 """def detect_anomalies(df, feature_cols, contamination=0.01):
@@ -218,7 +215,7 @@ from scripts.setup_functions import collapsible_output
 """
 
 
-def detect_anomalies(df, feature_cols, contamination=0.01):
+def detect_anomalies(df, feature_cols, contamination='auto'):
     '''Applies an Isolation Forest to detect multivariate outliers robustly.
     Evaluates each inferred stage independently.
     
@@ -271,7 +268,6 @@ def detect_anomalies(df, feature_cols, contamination=0.01):
     df_clean['anomaly'] = is_anomaly
     df_clean['anomaly_score'] = worst_scores
 
-    # Return the clean dataframe AND the matrix of stage-by-stage failures
     return df_clean, stage_flags
 
 def pivot_chip_data(df, stage_col, val_col):
@@ -469,6 +465,52 @@ def get_outlier_chips(anomalies_df):
     # Returns the standard index list
     return outliers.index.tolist()
 
+def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=2, final_stage=None):
+    '''
+    Identifies chips that failed absolute, delta, and intra metrics 
+    on the same underlying base stages.
+    '''
+    ensemble_chips = []
+
+    if final_stage is None and not flags_abs.empty:
+        final_stage = flags_abs.columns[-1]
+    
+    # Identify chips that have at least one failure in all three matrices
+    candidate_chips = set(flags_abs.index[flags_abs.any(axis=1)]) & set(flags_delta.index[flags_delta.any(axis=1)]) & set(flags_intra.index[flags_intra.any(axis=1)])
+                      
+    for chip in candidate_chips:
+        
+        abs_nodes = set(flags_abs.columns[flags_abs.loc[chip] == 1])
+        
+        delta_nodes = set()
+        for col in flags_delta.columns[flags_delta.loc[chip] == 1]:
+            if '->' in str(col):
+                parts = str(col).split('->')
+                delta_nodes.update([parts[0].strip(), parts[1].strip()])
+        
+        intra_nodes = set()
+        for col in flags_intra.columns[flags_intra.loc[chip] == 1]:
+            if '->' in str(col):
+                parts = str(col).split('->')
+                node1 = parts[0].strip()
+
+                node2 = parts[1].split('_')[0].strip() 
+                intra_nodes.update([node1, node2])
+            else:
+                # Fallback if a stage lacks an arrow but has a suffix
+                intra_nodes.add(str(col).split('_')[0].strip())
+                
+        '''# 4. If there is an intersection across all three, it's a true ensemble failure
+        if abs_nodes & delta_nodes & intra_nodes:
+            ensemble_chips.append(chip)'''
+
+        overlapping_stages = abs_nodes & delta_nodes & intra_nodes
+
+        if len(overlapping_stages) >= min_overlaps or (final_stage in overlapping_stages):
+            ensemble_chips.append(chip)
+            
+    return ensemble_chips
+
 def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col='quad_ch1_change', intra_val_col=None, title='PEL Analysis'):
     '''Analyses PEL signals, stage deltas, and intra-stage kinetics for anomalies.
 
@@ -518,21 +560,11 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
     anomalies_intra, flags_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
     outliers_intra = get_outlier_chips(anomalies_intra)
 
+    '''common_stages = flags_abs.columns.intersection(flags_delta.columns).intersection(flags_intra.columns)
+    stage_votes = (flags_abs[common_stages].add(flags_delta[common_stages], fill_value=0).add(flags_intra[common_stages], fill_value=0))
+    ensemble_failed_chips = stage_votes[stage_votes >= 2].dropna(how='all').index.tolist()'''
 
-    common_stages = flags_abs.columns.intersection(flags_delta.columns).intersection(flags_intra.columns)
-    
-    # 2. Add the matrices together safely (0 to 3 votes per stage per chip)
-    stage_votes = (
-        flags_abs[common_stages]
-        .add(flags_delta[common_stages], fill_value=0)
-        .add(flags_intra[common_stages], fill_value=0)
-    )
-    
-    # 3. A chip fails the ensemble if it gets >= 2 votes in ANY single stage
-    ensemble_failed_chips = stage_votes[stage_votes >= 2].dropna(how='all').index.tolist()
-    
-    print(f"\nFinal Ensemble Failures (Failed >= 2 datasets in the same stage): {len(ensemble_failed_chips)}")
-
+    ensemble_failed_chips = get_ensemble_failures(flags_abs, flags_delta, flags_intra)
 
     # Displays the results in a collapsible output section
     with collapsible_output(f'{title} - Absolute Signal'):
@@ -578,7 +610,6 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
 
     return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra, ensemble_failed_chips
 
-
 def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='channel1', change_col='channel1_change', intra_val_col=None, title='Immobilisation Analysis'):
     '''Analyses one immobilisation split across signal, delta, and kinetic features.
 
@@ -619,19 +650,11 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
     anomalies_intra, flags_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
     outliers_intra = get_outlier_chips(anomalies_intra)
 
-    common_stages = flags_abs.columns.intersection(flags_delta.columns).intersection(flags_intra.columns)
-    
-    # 2. Add the matrices together safely (0 to 3 votes per stage per chip)
-    stage_votes = (
-        flags_abs[common_stages]
-        .add(flags_delta[common_stages], fill_value=0)
-        .add(flags_intra[common_stages], fill_value=0)
-    )
-    
-    # 3. A chip fails the ensemble if it gets >= 2 votes in ANY single stage
-    ensemble_failed_chips = stage_votes[stage_votes >= 2].dropna(how='all').index.tolist()
-    
-    print(f"\nFinal Ensemble Failures (Failed >= 2 datasets in the same stage): {len(ensemble_failed_chips)}")
+    '''common_stages = flags_abs.columns.intersection(flags_delta.columns).intersection(flags_intra.columns)
+    stage_votes = (flags_abs[common_stages].add(flags_delta[common_stages], fill_value=0).add(flags_intra[common_stages], fill_value=0))
+    ensemble_failed_chips = stage_votes[stage_votes >= 2].dropna(how='all').index.tolist()'''
+
+    ensemble_failed_chips = get_ensemble_failures(flags_abs, flags_delta, flags_intra)
     
     # Displays the results in a collapsible output section
     with collapsible_output(f'{title} - Absolute Signal'):
@@ -674,14 +697,6 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
         analyse_anomaly_drivers(wide_intra, anomalies_intra, f'Immob [{split_name}] {intra_target} Intra-stage Kinetics')
     
     return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra, ensemble_failed_chips
-
-
-
-
-
-
-
-
 
 def plot_pel_layer_shifts(change_wide_df, channel_name='quad_ch1'):
     '''Plots PEL signal shifts between layers for each requested channel.
@@ -1744,32 +1759,33 @@ def get_top_drivers(df, chip_id, top_n=3):
     # Returns the formatted top drivers
     return [f'{stage} (Z: {z:.1f})' for stage, z in top_stages.items()]
 
-def prepare_section(df, stage_col, val_col):
-
-    '''Pivots the chip data and identifies outlier chips through anomaly detection.
-
-    Args:
-        df (pd.DataFrame): The input long-format dataframe containing chip metrics.
-        stage_col (str): The name of the column representing the processing stage or feature.
-        val_col (str): The name of the column containing the values to pivot.
+def prepare_ensemble_section(events_df, changes_df, intra_df, val_col, change_col):
+    '''Pivots all three data types, detects anomalies, and calculates true ensemble failures.
 
     Returns:
-        tuple[pd.DataFrame, list]: A tuple containing the pivoted wide-format dataframe and a list of identified outlier chip identifiers.
+        tuple[pd.DataFrame, list]: The wide absolute dataframe (used for profiling) and the ensemble outlier IDs.
     '''
 
-    # Filters out non-informative startup stages
-    filtered_df = df[~df[stage_col].isin(['Start', 'Initial'])]
+    # 1. Filter out startup stages
+    filtered_events = events_df[~events_df['stage'].isin(['Start', 'Initial'])]
+    filtered_changes = changes_df[~changes_df['stage'].isin(['Start', 'Initial'])]
+    filtered_intra = intra_df[~intra_df['stage'].isin(['Start', 'Initial'])]
 
-    # Pivots the data into a wide format using the specified stage and value columns
-    pivoted = pivot_chip_data(filtered_df, stage_col, val_col)
+    # 2. Pivot all three tables (using create_wide_intra for the full suite of kinetics)
+    wide_abs = pivot_chip_data(filtered_events, 'stage', val_col)
+    wide_delta = pivot_chip_data(filtered_changes, 'stage', change_col)
+    wide_intra = create_wide_intra(filtered_intra, val_col)
 
-    # Detects anomalies across all pivoted feature columns using automatic contamination scaling
-    anomalies = detect_anomalies(pivoted, pivoted.columns.tolist())
+    # 3. Get the anomaly flags for all three metrics
+    _, flags_abs = detect_anomalies(wide_abs, wide_abs.columns.tolist())
+    _, flags_delta = detect_anomalies(wide_delta, wide_delta.columns.tolist())
+    _, flags_intra = detect_anomalies(wide_intra, wide_intra.columns.tolist())
 
-    # Extracts the index identifiers for chips flagged as outliers
-    outliers = get_outlier_chips(anomalies)
+    # 4. Calculate ensemble failures using your strict stage-overlap logic
+    ensemble_outliers = get_ensemble_failures(flags_abs, flags_delta, flags_intra)
 
-    return pivoted, outliers
+    # Return the absolute dataframe (for top driver z-score profiling) and the ensemble outliers
+    return wide_abs, ensemble_outliers
 
 def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips, section_config, incomplete_chips=None, title='Overall At-Risk Chips Summary'):
     '''Clusters chips based on combined stage data, cross-references against standard curve metrics, and generates a structured summary report across 5 distinct sections.
