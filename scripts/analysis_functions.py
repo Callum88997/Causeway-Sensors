@@ -2019,7 +2019,7 @@ def prepare_ensemble_section(events_df, changes_df, intra_df, val_col, change_co
         change_col (str): The column name representing delta transitions.
 
     Returns:
-        tuple: The wide absolute dataframe (used for profiling) and the ensemble outlier IDs.
+        tuple: A dictionary of the three wide dataframes and the ensemble outlier IDs.
     '''
 
     # Filters out non-informative startup stages from the events dataframe
@@ -2052,8 +2052,15 @@ def prepare_ensemble_section(events_df, changes_df, intra_df, val_col, change_co
     # Calculates and extracts the ensemble failures based on strict stage-overlap logic
     ensemble_outliers = get_ensemble_failures(flags_abs, flags_delta, flags_intra)
 
-    # Returns the absolute dataframe for profiling alongside the list of ensemble outliers
-    return wide_abs, ensemble_outliers
+    # Packs the wide dataframes into a dictionary for granular downstream reporting
+    dfs = {
+        'Absolute': wide_abs,
+        'Stage Delta': wide_delta,
+        'Intra-stage Kinetics': wide_intra
+    }
+
+    # Returns the dictionary of datasets alongside the list of ensemble outliers
+    return dfs, ensemble_outliers
 
 def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips, section_config, incomplete_chips=None, title='Overall At-Risk Chips Summary'):
     '''Clusters chips based on combined stage data, cross-references against standard curve metrics, and generates a structured summary report across 5 distinct sections.
@@ -2235,9 +2242,9 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
         print('Top 5 Anomalous Stages (Ranked by Average Z-Score among Outliers):\n')
         
         # Loops through each configuration section to evaluate global anomalies
-        for section_name, (df_source, outlier_list) in section_config.items():
+        for section_name, (dfs, outlier_list) in section_config.items():
 
-            # Prints the specific dataset and channel header
+            # Prints the specific section header
             print(f'--- {section_name} ---')
             
             # Evaluates whether any outliers were flagged in the current section
@@ -2245,47 +2252,60 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
 
                 # Prints a message confirming no anomalies exist for this section
                 print('  No outliers detected in this section.\n')
-
                 continue
             
-            # Filters the outlier list to ensure the chips exist in the dataframe index
-            valid_outliers = [chip for chip in outlier_list if chip in df_source.index]
-            
-            # Evaluates whether valid outlier data is available to process
-            if not valid_outliers:
+            # Loops through each specific dataset (Absolute, Stage Delta, Kinetics)
+            for ds_name, df_source in dfs.items():
 
-                # Prints a message indicating missing data
-                print('  No valid outlier data available to calculate stages.\n')
-                continue
-
-            # Calculates the global statistical mean across all chips in the dataframe
-            mean = df_source.mean()
-
-            # Calculates the global standard deviation, replacing zeros to prevent division errors
-            std = df_source.std().replace(0, 1e-9)
-            
-            # Calculates the absolute z-scores exclusively for the valid outlier chips
-            z_scores = ((df_source.loc[valid_outliers] - mean) / std).abs()
-            
-            # Calculates the average z-score across the outliers for each stage
-            avg_z_scores = z_scores.mean(axis=0).dropna()
-            
-            # Checks whether the calculated averages contain data
-            if avg_z_scores.empty:
-
-                # Prints a standard not-applicable message
-                print('  N/A\n')
-                continue
+                # Filters the outlier list to ensure the chips exist in the dataframe index
+                valid_outliers = [chip for chip in outlier_list if chip in df_source.index]
                 
-            # Sorts the average z-scores in descending order and extracts the top 5 highest impact stages
-            top_5_stages = avg_z_scores.sort_values(ascending=False).head(5)
-            
-            # Loops through the top stages to format and print their rankings
-            for rank, (stage, z) in enumerate(top_5_stages.items(), 1):
-                print(f'  {rank}. {stage} (Avg Z: {z:.1f})')
-            
-            # Prints an empty line for visual spacing between sections
-            print('')
+                # Evaluates whether valid outlier data is available to process
+                if not valid_outliers:
+
+                    # Prints a message indicating missing data for the dataset
+                    print(f'  [{ds_name}] No valid outlier data available.\n')
+                    continue
+
+                # Calculates the global statistical mean across all chips in the dataframe
+                mean = df_source.mean()
+
+                # Calculates the global standard deviation, replacing zeros to prevent division errors
+                std = df_source.std().replace(0, 1e-9)
+                
+                # Calculates the absolute z-scores exclusively for the valid outlier chips
+                z_scores = ((df_source.loc[valid_outliers] - mean) / std).abs()
+                
+                # Calculates the average, minimum, and maximum z-score across the outliers for each stage
+                avg_z_scores = z_scores.mean(axis=0).dropna()
+                min_z_scores = z_scores.min(axis=0)
+                max_z_scores = z_scores.max(axis=0)
+                
+                # Checks whether the calculated averages contain data
+                if avg_z_scores.empty:
+
+                    # Prints a standard not-applicable message
+                    print(f'  [{ds_name}] N/A\n')
+                    continue
+                    
+                # Sorts the average z-scores in descending order and extracts the top 5 highest impact stages
+                top_5_stages = avg_z_scores.sort_values(ascending=False).head(5)
+                
+                # Prints the dataset sub-header
+                print(f'  [{ds_name}] Top Drivers:')
+
+                # Loops through the top stages to format and print their rankings
+                for rank, (stage, z_avg) in enumerate(top_5_stages.items(), 1):
+                    
+                    # Extracts the minimum and maximum Z-scores for the current stage
+                    z_min = min_z_scores[stage]
+                    z_max = max_z_scores[stage]
+                    
+                    # Prints the formatted ranking including average, minimum, and maximum Z-scores
+                    print(f'    {rank}. {stage} (Avg Z: {z_avg:.1f} | Min: {z_min:.1f} | Max: {z_max:.1f})')
+                
+                # Prints an empty line for visual spacing between datasets
+                print('')
 
     # Displays the detailed chip profiles within a collapsible output section
     with collapsible_output(f'{title} - Chip Profiles'):
@@ -2404,7 +2424,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
             drivers_info = {}
 
             # Loops through each section configuration to aggregate the driving metrics
-            for section_name, (df_source, outlier_list) in section_config.items():
+            for section_name, (dfs, outlier_list) in section_config.items():
 
                 # Checks if the current chip is flagged within the specific section
                 if chip in outlier_list:
@@ -2412,8 +2432,12 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
                     # Appends the triggered section name to the detailed flags list
                     detailed_flags.append(section_name)
 
-                    # Extracts and maps the top driving metrics for the flagged section
-                    drivers_info[section_name] = get_top_drivers(df_source, chip)
+                    # Initialises a nested dictionary for the dataset metrics
+                    drivers_info[section_name] = {}
+
+                    # Loops through each dataset to extract the top distinct drivers
+                    for ds_name, df_source in dfs.items():
+                        drivers_info[section_name][ds_name] = get_top_drivers(df_source, chip)
             
             # Initialises an empty list to assemble the formatted standard curve data
             sc_data = []
@@ -2511,17 +2535,23 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
                 # Prints the header for divergent regions
                 print('\nTop 3 Divergent Regions for Triggered Sections:')
 
-                # Loops through each triggered section and its associated driving metrics
-                for section, drivers in info['Drivers'].items():
+                # Loops through each triggered section and its associated datasets
+                for section, ds_drivers in info['Drivers'].items():
 
                     # Prints the specific section header
                     print(f'\n  - {section}:')
 
-                    # Loops through each specific driving metric
-                    for d in drivers: 
+                    # Loops through each specific dataset (Absolute, Delta, Kinetics)
+                    for ds_name, drivers in ds_drivers.items():
+                        
+                        # Prints the dataset sub-header
+                        print(f'    [{ds_name}]')
 
-                        # Prints the individual driving metric
-                        print(f'      {d}')
+                        # Loops through each specific driving metric
+                        for d in drivers: 
+
+                            # Prints the individual driving metric
+                            print(f'      {d}')
 
             # Prints a trailing visual separator to complete the profile block
             print('-' * 80)
@@ -2542,7 +2572,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
                 
             # Prints a newline for visual spacing between chips
             print('\n')
-
+                  
 # Binding Kinetics
 def parse_conc_flag(conc_str):
     '''Parses a concentration flag label to extract just the numeric concentration.
