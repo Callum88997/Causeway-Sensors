@@ -5,7 +5,11 @@ import re
 
 # Defines configuration constants for data directories
 DATA_DIR = 'data'
+
+# Defines the subdirectory path for tables
 TABLE_DIR = os.path.join(DATA_DIR, 'tables')
+
+# Defines the subdirectory path for storage buckets
 BUCKET_DIR = os.path.join(DATA_DIR, 'buckets')
 
 # Declares column names representing time
@@ -35,7 +39,6 @@ def convert_numeric_columns(df, threshold=0.9):
         if numeric_ratio >= threshold:
             df[col] = converted
 
-    # Returns the updated dataframe
     return df
 
 def is_valid_chip(file_name):
@@ -90,10 +93,8 @@ def is_valid_prg_only(df, file_name):
             # Prints a skipping warning with the violating stages
             print(f"SKIPPING: Flag file '{file_name}' contains non-'prg' reagents: {violating_stages}")
 
-            # Returns False indicating validation failure
             return False
             
-    # Returns True if validation passes
     return True
 
 def load_tables():
@@ -142,7 +143,6 @@ def load_tables():
                 # Assigns an empty dataframe
                 tables[name] = pd.DataFrame()
             
-    # Returns the dictionary of loaded tables
     return tables
 
 def load_bucket_files(tables):
@@ -160,7 +160,10 @@ def load_bucket_files(tables):
     
     # Checks if the bucket directory exists and returns an empty dictionary if not
     if not os.path.exists(BUCKET_DIR):
+
+        # Prints an error message indicating the missing directory
         print(f'Directory not found: {BUCKET_DIR}')
+
         return buckets
 
     # Retrieves a list of all subdirectories within the bucket directory
@@ -284,7 +287,6 @@ def load_bucket_files(tables):
                 except Exception as e:
                     print(f'Failed loading {path}: {e}')
                     
-    # Returns the nested dictionary of loaded bucket files
     return buckets
 
 def load_titan_data():
@@ -312,5 +314,4 @@ def load_titan_data():
     # Prints a completion message
     print('Titan data load complete.')
 
-    # Returns the loaded tables and buckets
     return tables, buckets
