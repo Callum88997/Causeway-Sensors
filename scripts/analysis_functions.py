@@ -790,7 +790,7 @@ def get_related_columns(query_col, abs_cols, change_cols, intra_cols):
 
     return result
 
-def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=3, final_stage=None, debug_chip='B72604R8146'):
+def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=6, final_stage=None, debug_chip='B72604R8146'):
     '''Identifies chips that failed absolute, delta and intra metrics on the same underlying base stages.
     
     Args:
