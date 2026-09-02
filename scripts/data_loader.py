@@ -41,14 +41,14 @@ def convert_numeric_columns(df, threshold=0.9):
 
     return df
 
-def is_valid_chip(file_name):
+def is_valid_chip(chip):
     '''Evaluates if the file name contains a valid chip ID.
 
     Args:
-        file_name (str): The name of the file being validated.
+        chip (str): The name of the file / chip id being validated.
 
     Returns:
-        bool: True if the file name contains a valid chip format, False otherwise.
+        bool: True if the file name / chip id contains a valid chip format, False otherwise.
     '''
 
     # Defines the regex pattern for a real chip
@@ -56,7 +56,7 @@ def is_valid_chip(file_name):
     chip_pattern = r'B\d+R\d+|R\d+R\d+'
     
     # Returns True if the pattern is found in the filename
-    return bool(re.search(chip_pattern, file_name))
+    return bool(re.search(chip_pattern, chip))
 
 def is_valid_prg_only(df, file_name):
     '''Evaluates if 'prg' is the only active reagent, ignoring standard control steps.
@@ -130,6 +130,12 @@ def load_tables():
 
                 # Converts applicable columns to numeric types
                 df = convert_numeric_columns(df)
+
+                # Checks if the current table is 'standard_curves' to apply additional filtering
+                if name == 'standard_curves':
+
+                    # Filters the dataframe to include only rows with valid chip IDs
+                    df = df[df['chip_id'].astype(str).apply(is_valid_chip)]
 
                 # Assigns the processed dataframe to the dictionary
                 tables[name] = df
@@ -315,3 +321,10 @@ def load_titan_data():
     print('Titan data load complete.')
 
     return tables, buckets
+
+
+
+
+###
+# need to filter out for sc as well
+###

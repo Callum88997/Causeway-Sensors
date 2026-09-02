@@ -2690,7 +2690,7 @@ def run_standard_curve_analysis(standard_curves_df):
             # Renders the stored parameter curve plot
             plt.show()
 
-    # Initialises the calculated parameter plots collapsible output widget
+    '''# Initialises the calculated parameter plots collapsible output widget
     calc_plot_output = collapsible_output('Standard Curve Plots (Calculated Parameters)')
 
     # Extracts a deduplicated list of all chip identifiers associated with valid standard curves
@@ -2742,7 +2742,7 @@ def run_standard_curve_analysis(standard_curves_df):
                 plt.legend()
 
                 # Renders the recalculated parameter curve plot
-                plt.show()
+                plt.show()'''
 
     # Initialises an empty list to aggregate the recalculated standard curve metrics
     sc_collected_data = []

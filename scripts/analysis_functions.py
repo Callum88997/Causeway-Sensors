@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import seaborn as sns
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import ipywidgets as widgets
 from IPython.display import display
 import re
@@ -373,8 +374,195 @@ def get_outlier_chips(anomalies_df):
     # Returns the standard index as a list
     return outliers.index.tolist()
 
-def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=2, final_stage=None):
-    '''Identifies chips that failed absolute, delta, and intra metrics on the same underlying base stages.
+"""def get_related_columns(query_col, abs_cols, change_cols, intra_cols):
+    '''A unified method to find all related columns across Absolute, Change, and Intra datasets.
+    
+    Args:
+        query_col (str): The column name you want to look up.
+        abs_cols (list): List of all Absolute column names.
+        change_cols (list): List of all Change/Delta column names.
+        intra_cols (list): List of all Intra-stage column names.
+        
+    Returns:
+        dict: A dictionary containing the detected type and its linked columns across all sets.
+    '''
+    
+    # Casts the query column to a string and strips leading and trailing whitespace
+    query_str = str(query_col).strip()
+    
+    # Initialises a dictionary to store the parsed relationships and detected types
+    result = {
+        'Query': query_str,
+        'Detected_Type': None,
+        'Absolute_Columns': [],
+        'Change_Columns': [],
+        'Intra_Columns': []
+    }
+    
+    # Initialises a variable to track the identified base change column
+    base_change_col = None
+
+    # Initialises an empty list to store the extracted underlying stage nodes
+    extracted_nodes = []
+
+    # Evaluates whether the query string exists within the intra-stage columns list
+    if query_str in intra_cols:
+
+        # Assigns the detected type as an intra-stage feature
+        result['Detected_Type'] = 'Intra'
+
+        # Loops through each column in the change columns list to find the parent
+        for c_col in change_cols:
+
+            # Evaluates whether the query string starts with the current change column prefix
+            if query_str.startswith(f"{c_col}_"):
+
+                # Assigns the matched change column as the base reference
+                base_change_col = str(c_col)
+
+                # Breaks the loop once the parent change column is successfully identified
+                break
+                
+    # Evaluates whether the query string exists directly within the change columns list
+    elif query_str in change_cols:
+
+        # Assigns the detected type as a change feature
+        result['Detected_Type'] = 'Change'
+
+        # Assigns the query string directly as the base change column
+        base_change_col = query_str
+        
+    # Evaluates whether the query string exists directly within the absolute columns list
+    elif query_str in abs_cols:
+
+        # Assigns the detected type as an absolute feature
+        result['Detected_Type'] = 'Absolute'
+
+        # Assigns the query string as the sole extracted node
+        extracted_nodes = [query_str]
+        
+    # Handles cases where the query string is not found in any provided list
+    else:
+
+        # Returns an error dictionary indicating the missing column
+        return {"Error": f"Column '{query_str}' not found in any provided list."}
+    
+    # Evaluates whether a base change column was successfully identified
+    if base_change_col:
+
+        # Checks whether the base change column contains a standard transition arrow
+        if '->' in base_change_col:
+
+            # Splits the base change column string at the transition arrow
+            parts = base_change_col.split('->')
+
+            # Extracts and strips the origin and destination nodes into the tracking list
+            extracted_nodes = [parts[0].strip(), parts[1].strip()]
+
+        # Checks whether the base change column contains a custom shift identifier
+        elif '_to_' in base_change_col:
+
+            # Strips the custom prefix prefixes from the column string
+            clean_col = base_change_col.replace('Net_Shift_', '').replace('Total_Shift_', '')
+
+            # Splits the cleaned column string at the custom transition identifier
+            parts = clean_col.split('_to_')
+
+            # Extracts and strips the origin and destination nodes into the tracking list
+            extracted_nodes = [parts[0].strip(), parts[1].strip()]
+
+    # Evaluates whether the detected type is an absolute column
+    if result['Detected_Type'] == 'Absolute':
+
+        # Appends the query string directly to the absolute columns list
+        result['Absolute_Columns'] = [query_str]
+
+    # Handles configurations for change and intra-stage types
+    else:
+
+        # Filters and assigns the extracted nodes that exist within the absolute columns list
+        result['Absolute_Columns'] = [n for n in extracted_nodes if n in abs_cols]
+
+    # Evaluates whether the detected type is an absolute column to populate change relationships
+    if result['Detected_Type'] == 'Absolute':
+        
+        # Initialises an empty list to store matching change columns
+        matched_changes = []
+
+        # Loops through each column in the provided change columns list
+        for c_col in change_cols:
+
+            # Casts the current change column to a string
+            c_str = str(c_col)
+
+            # Checks whether the current change column contains a standard transition arrow
+            if '->' in c_str:
+
+                # Splits the string and strips whitespace to extract the component parts
+                parts = [p.strip() for p in c_str.split('->')]
+
+                # Evaluates whether the query string is present in the extracted parts
+                if query_str in parts:
+
+                    # Appends the matching change column to the tracking list
+                    matched_changes.append(c_str)
+
+            # Checks whether the current change column contains a custom shift identifier
+            elif '_to_' in c_str:
+
+                # Strips the custom prefix prefixes from the column string
+                clean_col = c_str.replace('Net_Shift_', '').replace('Total_Shift_', '')
+
+                # Splits the string and strips whitespace to extract the component parts
+                parts = [p.strip() for p in clean_col.split('_to_')]
+
+                # Evaluates whether the query string is present in the extracted parts
+                if query_str in parts:
+
+                    # Appends the matching change column to the tracking list
+                    matched_changes.append(c_str)
+
+        # Assigns the compiled list of matched changes to the result dictionary
+        result['Change_Columns'] = matched_changes
+
+    # Handles configurations for change and intra-stage types
+    else:
+
+        # Evaluates whether the identified base change column exists in the provided change columns list
+        if base_change_col in change_cols:
+
+            # Assigns the base change column to the change columns list in the result dictionary
+            result['Change_Columns'] = [base_change_col]
+
+    # Evaluates whether the detected type is an absolute column to populate intra-stage relationships
+    if result['Detected_Type'] == 'Absolute':
+        
+        # Initialises an empty list to store matching intra-stage columns
+        matched_intras = []
+
+        # Loops through each matched change column identified in the previous step
+        for matched_c in result['Change_Columns']:
+
+            # Finds and appends all intra-stage columns derived from the current matched change column
+            matched_intras.extend([i for i in intra_cols if str(i).startswith(f"{matched_c}_")])
+
+        # Assigns the compiled list of matched intra-stage columns to the result dictionary
+        result['Intra_Columns'] = matched_intras
+
+    # Handles configurations for change and intra-stage types
+    else:
+
+        # Evaluates whether a base change column was successfully identified
+        if base_change_col:
+
+            # Finds and assigns all intra-stage columns derived from the base change column
+            result['Intra_Columns'] = [i for i in intra_cols if str(i).startswith(f"{base_change_col}_")]
+
+    # Returns the fully populated relationships dictionary
+    return result
+"""
+"""def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=2, final_stage=None):
+    '''Identifies chips that failed absolute, delta and intra metrics on the same underlying base stages.
     
     Args:
         flags_abs (pd.DataFrame): The dataframe tracking absolute stage failures.
@@ -395,6 +583,29 @@ def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=2, f
 
         # Assigns the last evaluated column in the absolute flags matrix as the final stage
         final_stage = flags_abs.columns[-1]
+
+
+
+    debug_chip = 'B72604R8146'
+    # --- DIAGNOSTIC BLOCK 1: Matrix Presence ---
+    if debug_chip:
+        print(f"\n--- ENSEMBLE DIAGNOSTIC TRACE: {debug_chip} ---")
+        
+        # Extract the exact column names where this chip flagged a '1'
+        failed_abs = flags_abs.columns[flags_abs.loc[debug_chip] == 1].tolist() if debug_chip in flags_abs.index else []
+        failed_delta = flags_delta.columns[flags_delta.loc[debug_chip] == 1].tolist() if debug_chip in flags_delta.index else []
+        failed_intra = flags_intra.columns[flags_intra.loc[debug_chip] == 1].tolist() if debug_chip in flags_intra.index else []
+        
+        print("1. Matrix-level Flags (Exact columns the chip failed):")
+        print(f"   - Absolute: {failed_abs if failed_abs else 'None'}")
+        print(f"   - Delta:    {failed_delta if failed_delta else 'None'}")
+        print(f"   - Intra:    {failed_intra if failed_intra else 'None'}")
+        
+        if not (failed_abs and failed_delta and failed_intra):
+            print("\n FAILURE CAUSE: The chip was dropped at step 1. To even be considered a candidate, a chip MUST fail at least one metric in ALL THREE matrices.")
+
+
+
     
     # Identifies initial candidate chips by finding the intersection of chips failing at least once in all three modes
     candidate_chips = set(flags_abs.index[flags_abs.any(axis=1)]) & set(flags_delta.index[flags_delta.any(axis=1)]) & set(flags_intra.index[flags_intra.any(axis=1)])
@@ -447,7 +658,29 @@ def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=2, f
                 intra_nodes.add(str(col).split('_')[0].strip())
 
         # Computes the intersection of specific base stages failing across all three evaluation matrices
-        overlapping_stages = abs_nodes & delta_nodes & intra_nodes
+        #overlapping_stages = abs_nodes & delta_nodes & intra_nodes
+        overlapping_stages = (abs_nodes & delta_nodes) | (abs_nodes & intra_nodes) | (delta_nodes & intra_nodes)
+
+
+
+        if debug_chip and chip == debug_chip:
+            print("\n2. Base Stages Extracted (Stripped of suffixes/transitions):")
+            print(f"   - Absolute nodes: {abs_nodes}")
+            print(f"   - Delta nodes:    {delta_nodes}")
+            print(f"   - Intra nodes:    {intra_nodes}")
+            print(f"\n3. Intersection (Stages failing in AT LEAST 2 of 3 domains):")
+            print(f"   - 2-out-of-3 failed stages: {overlapping_stages}")
+            print(f"\n4. Final Decision Criteria:")
+            print(f"   - Failed stages count: {len(overlapping_stages)} (Minimum required: {min_overlaps})")
+            print(f"   - Final stage bypass allowed if in: '{final_stage}'")
+            
+            if len(overlapping_stages) >= min_overlaps or (final_stage in overlapping_stages):
+                print("    RESULT: Chip passes ensemble check (FLAGGED as anomaly).")
+            else:
+                print("    RESULT: Chip failed ensemble check. It did not have enough stages failing the 2-out-of-3 rule.")
+
+
+
 
         # Evaluates if the stage intersection meets the minimum threshold or explicitly targets the final stage
         if len(overlapping_stages) >= min_overlaps or (final_stage in overlapping_stages):
@@ -457,6 +690,235 @@ def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=2, f
             
     # Returns the list containing all identified ensemble failure chips
     return ensemble_chips
+"""
+
+
+def get_related_columns(query_col, abs_cols, change_cols, intra_cols):
+    '''A unified method to find all related columns across Absolute, Change, and Intra datasets.
+    
+    Args:
+        query_col (str): The column name you want to look up.
+        abs_cols (list): List of all Absolute column names.
+        change_cols (list): List of all Change/Delta column names.
+        intra_cols (list): List of all Intra-stage column names.
+        
+    Returns:
+        dict: A dictionary containing the detected type and its linked columns across all sets.
+    '''
+    
+    query_str = str(query_col).strip()
+    
+    result = {
+        'Query': query_str,
+        'Detected_Type': None,
+        'Absolute_Columns': [],
+        'Change_Columns': [],
+        'Intra_Columns': []
+    }
+    
+    base_change_col = None
+    extracted_nodes = []
+
+    # Evaluates whether the query string exists within the intra-stage columns list
+    if query_str in intra_cols:
+        result['Detected_Type'] = 'Intra'
+        # Loops through each column in the change columns list to find the parent
+        for c_col in change_cols:
+            c_str = str(c_col)
+            # FIX: Checks for exact match OR a suffix match
+            if query_str == c_str or query_str.startswith(f"{c_str}_"):
+                base_change_col = c_str
+                break
+                
+    elif query_str in change_cols:
+        result['Detected_Type'] = 'Change'
+        base_change_col = query_str
+        
+    elif query_str in abs_cols:
+        result['Detected_Type'] = 'Absolute'
+        extracted_nodes = [query_str]
+        
+    else:
+        return {"Error": f"Column '{query_str}' not found in any provided list."}
+    
+    # Evaluates whether a base change column was successfully identified
+    if base_change_col:
+        if '->' in base_change_col:
+            parts = base_change_col.split('->')
+            extracted_nodes = [parts[0].strip(), parts[1].strip()]
+        elif '_to_' in base_change_col:
+            clean_col = base_change_col.replace('Net_Shift_', '').replace('Total_Shift_', '')
+            parts = clean_col.split('_to_')
+            extracted_nodes = [parts[0].strip(), parts[1].strip()]
+
+    # Absolute Relationships
+    if result['Detected_Type'] == 'Absolute':
+        result['Absolute_Columns'] = [query_str]
+    else:
+        result['Absolute_Columns'] = [n for n in extracted_nodes if n in abs_cols]
+
+    # Change Relationships
+    if result['Detected_Type'] == 'Absolute':
+        matched_changes = []
+        for c_col in change_cols:
+            c_str = str(c_col)
+            if '->' in c_str:
+                parts = [p.strip() for p in c_str.split('->')]
+                if query_str in parts:
+                    matched_changes.append(c_str)
+            elif '_to_' in c_str:
+                clean_col = c_str.replace('Net_Shift_', '').replace('Total_Shift_', '')
+                parts = [p.strip() for p in clean_col.split('_to_')]
+                if query_str in parts:
+                    matched_changes.append(c_str)
+        result['Change_Columns'] = matched_changes
+    else:
+        if base_change_col in change_cols:
+            result['Change_Columns'] = [base_change_col]
+
+    # Intra Relationships
+    if result['Detected_Type'] == 'Absolute':
+        matched_intras = []
+        for matched_c in result['Change_Columns']:
+            # FIX: Grabs the exact match (flags df) OR the suffix match (raw df)
+            matched_intras.extend([i for i in intra_cols if i == matched_c or str(i).startswith(f"{matched_c}_")])
+        result['Intra_Columns'] = matched_intras
+    else:
+        if base_change_col:
+            # FIX: Grabs the exact match OR the suffix match
+            result['Intra_Columns'] = [i for i in intra_cols if i == base_change_col or str(i).startswith(f"{base_change_col}_")]
+
+    return result
+
+def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=3, final_stage=None, debug_chip='B72604R8146'):
+    '''Identifies chips that failed absolute, delta and intra metrics on the same underlying base stages.
+    
+    Args:
+        flags_abs (pd.DataFrame): The dataframe tracking absolute stage failures.
+        flags_delta (pd.DataFrame): The dataframe tracking delta transition failures.
+        flags_intra (pd.DataFrame): The dataframe tracking intra-stage dynamic failures.
+        min_overlaps (int, optional): The minimum number of intersecting failure modes required. Defaults to 2.
+        final_stage (str, optional): The identifier for the terminal stage. Defaults to None.
+        debug_chip (str, optional): A specific chip ID to print diagnostic tracing for. Defaults to 'B72604B146'.
+        
+    Returns:
+        list: A list of chip IDs flagged as ensemble failures.
+    '''
+    
+    # Initialises an empty list to store chips that fail across multiple paradigms
+    ensemble_chips = []
+
+    # Checks if a final stage is unassigned and the absolute flags dataframe is populated
+    if final_stage is None and not flags_abs.empty:
+        # Assigns the last evaluated column in the absolute flags matrix as the final stage
+        final_stage = flags_abs.columns[-1]
+
+    # Extracts full column lists to pass to the relationship mapper
+    abs_cols = flags_abs.columns.tolist()
+    change_cols = flags_delta.columns.tolist()
+    intra_cols = flags_intra.columns.tolist()
+
+    # Pre-computes the relationships for every base stage using the unified method
+    stage_map = {}
+    for stage in abs_cols:
+        stage_map[stage] = get_related_columns(stage, abs_cols, change_cols, intra_cols)
+
+    # Identifies initial candidate chips by finding the union of chips failing at least once in ANY mode
+    candidate_chips = set(flags_abs.index[flags_abs.any(axis=1)]) | \
+                      set(flags_delta.index[flags_delta.any(axis=1)]) | \
+                      set(flags_intra.index[flags_intra.any(axis=1)])
+
+    if debug_chip and debug_chip not in candidate_chips:
+        print(f"\n DIAGNOSTIC ALERT: Chip '{debug_chip}' did not flag an anomaly in ANY of the three datasets.")
+        print("It is completely mathematically normal according to the Isolation Forest and is not a candidate for ensemble failure.\n")
+
+    # Loops through each candidate chip
+    for chip in candidate_chips:
+
+        is_debug = (chip == debug_chip)
+
+        # Initialises a set to track which master stages failed the 2-out-of-3 rule
+        failed_stages = set()
+
+        if is_debug:
+            print(f"\n{'='*70}")
+            print(f"--- ENSEMBLE DIAGNOSTIC TRACE: {debug_chip} ---")
+            print(f"{'='*70}")
+            
+            failed_abs = flags_abs.columns[flags_abs.loc[debug_chip] == 1].tolist() if debug_chip in flags_abs.index else []
+            failed_delta = flags_delta.columns[flags_delta.loc[debug_chip] == 1].tolist() if debug_chip in flags_delta.index else []
+            failed_intra = flags_intra.columns[flags_intra.loc[debug_chip] == 1].tolist() if debug_chip in flags_intra.index else []
+            
+            print("1. Matrix-level Flags (Exact columns the chip failed):")
+            print(f"   - Absolute ({len(failed_abs)}): {failed_abs if failed_abs else 'None'}")
+            print(f"   - Delta    ({len(failed_delta)}): {failed_delta if failed_delta else 'None'}")
+            print(f"   - Intra    ({len(failed_intra)}): {failed_intra if failed_intra else 'None'}")
+            print("\n2. Stage-by-Stage Evaluation (Showing ONLY stages where chip flagged at least one metric):")
+
+        # Loops through every master stage and its mapped relationships
+        for stage, rels in stage_map.items():
+            
+            failed_in_abs = False
+            failed_in_delta = False
+            failed_in_intra = False
+            
+            # 1. Checks if the chip failed this specific Absolute stage
+            if chip in flags_abs.index and flags_abs.loc[chip, stage] == 1:
+                failed_in_abs = True
+                
+            # 2. Checks if the chip failed ANY of the related Delta/Change columns
+            if chip in flags_delta.index:
+                for c_col in rels['Change_Columns']:
+                    if c_col in flags_delta.columns and flags_delta.loc[chip, c_col] == 1:
+                        failed_in_delta = True
+                        break # One failure is enough to flag the dataset for this stage
+                        
+            # 3. Checks if the chip failed ANY of the related Intra columns
+            if chip in flags_intra.index:
+                for i_col in rels['Intra_Columns']:
+                    if i_col in flags_intra.columns and flags_intra.loc[chip, i_col] == 1:
+                        failed_in_intra = True
+                        break # One failure is enough to flag the dataset for this stage
+
+            # Counts how many datasets flagged a failure for this specific stage
+            datasets_failed = sum([failed_in_abs, failed_in_delta, failed_in_intra])
+            
+            # If the stage failed in at least 2 datasets, add it to the failed stages set
+            if datasets_failed >= 2:
+                failed_stages.add(stage)
+
+            if is_debug and datasets_failed > 0:
+                print(f"\n   -> Master Stage: '{stage}'")
+                print(f"      Mapped Change Cols : {rels['Change_Columns']}")
+                print(f"      Mapped Intra Cols  : {rels['Intra_Columns']}")
+                print(f"      [Flags triggered] -> Absolute: {failed_in_abs} | Change: {failed_in_delta} | Intra: {failed_in_intra}")
+                if datasets_failed >= 2:
+                    print(f"       Datasets Failed: {datasets_failed} -> MEETS 2-out-of-3 rule. Stage '{stage}' added to failure count.")
+                else:
+                    print(f"       Datasets Failed: {datasets_failed} -> DOES NOT meet 2-out-of-3 rule. Stage ignored.")
+
+        # --- DIAGNOSTIC BLOCK 3: Final Intersection Criteria ---
+        if is_debug:
+            print(f"\n3. Final Decision Criteria:")
+            print(f"   - Total failed stages (2/3 rule): {len(failed_stages)} (Minimum required: {min_overlaps})")
+            print(f"   - Final stage bypass allowed if in: '{final_stage}'")
+            
+            if len(failed_stages) >= min_overlaps or (final_stage in failed_stages):
+                print(f"    RESULT: Chip {debug_chip} PASSES ensemble check (FLAGGED as anomaly).")
+            else:
+                print(f"    RESULT: Chip {debug_chip} FAILED ensemble check. Not enough stages met the criteria.")
+            print(f"{'='*70}\n")
+
+        # Evaluates if the total failed stages meet the minimum threshold or target the final stage
+        if len(failed_stages) >= min_overlaps or (final_stage in failed_stages):
+            # Appends the confirmed chip to the final ensemble failures list
+            ensemble_chips.append(chip)
+            
+    # Returns the list containing all identified ensemble failure chips
+    return ensemble_chips
+
+
+
 
 def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col='quad_ch1_change', intra_val_col=None, title='PEL Analysis'):
     '''Analyses PEL signals, stage deltas, and intra-stage kinetics for anomalies.
@@ -1379,596 +1841,836 @@ def create_interactive_dashboard(data_catalog):
     # Initialises the mode toggle buttons for analysis selection
     mode_toggle = widgets.ToggleButtons(options=['Absolute', 'Stage Delta', 'Intra-stage Kinetics'], style={'description_width': 'initial'})
     
-    # Initialises the checkbox for filtering PrG stages in Immobilisation sources
+    # Initialises the checkbox for filtering Protein G stages in immobilisation sources
     prg_checkbox = widgets.Checkbox(value=False, description='PrG Stages Only (Immob)', tooltip='Filter Immobilisation metrics to PrG stages only', style={'description_width': 'initial'})
     
-    # Groups the mode toggle and PrG checkbox in a horizontal box
+    # Groups the mode toggle and Protein G checkbox into a horizontal box
     top_controls = widgets.HBox([mode_toggle, prg_checkbox], layout=widgets.Layout(align_items='center', grid_gap='20px'))
 
     # Initialises the channel dropdown widget
-    channel_dropdown = widgets.Dropdown(options=['Channel 1', 'Channel 2'], value='Channel 1', description='Channel:')
+    channel_dropdown = widgets.Dropdown(options=['Channel 1', 'Channel 2', 'Both'], value='Channel 1', description='Channel:')
 
-    # Initialises the X and Y source dropdown widgets
+    # Initialises the horizontal axis source dropdown widget
     x_source_drop = widgets.Dropdown(options=all_sources, value=all_sources[0], description='X Source:')
+
+    # Initialises the vertical axis source dropdown widget
     y_source_drop = widgets.Dropdown(options=all_sources, value=all_sources[0], description='Y Source:')
 
-    # Initialises the X and Y metric dropdown widgets
+    # Initialises the horizontal axis metric dropdown widget
     x_col_drop = widgets.Dropdown(description='X Metric:')
+
+    # Initialises the vertical axis metric dropdown widget
     y_col_drop = widgets.Dropdown(description='Y Metric:')
 
-    # Initialises the bounded float text inputs for X and Y minimum and maximum range filters
+    # Initialises the bounded float text input for the horizontal axis minimum filter
     x_min_input = widgets.BoundedFloatText(description='Min X:')
+
+    # Initialises the bounded float text input for the horizontal axis maximum filter
     x_max_input = widgets.BoundedFloatText(description='Max X:')
+
+    # Initialises the bounded float text input for the vertical axis minimum filter
     y_min_input = widgets.BoundedFloatText(description='Min Y:')
+
+    # Initialises the bounded float text input for the vertical axis maximum filter
     y_max_input = widgets.BoundedFloatText(description='Max Y:')
 
-    # Initialises the buttons to reset X and Y filters to their original bounds
+    # Initialises the button to reset the horizontal axis filters to their original bounds
     x_reset_btn = widgets.Button(description='Reset X', button_style='info', tooltip='Reset X filters to original bounds')
+
+    # Initialises the button to reset the vertical axis filters to their original bounds
     y_reset_btn = widgets.Button(description='Reset Y', button_style='info', tooltip='Reset Y filters to original bounds')
+
+    # Initialises the integer slider for the horizontal axis histogram bins
+    x_bins_slider = widgets.IntSlider(value=30, min=5, max=150, step=5, description='X Hist Bins:', layout=widgets.Layout(width='300px'))
+
+    # Initialises the integer slider for the vertical axis histogram bins
+    y_bins_slider = widgets.IntSlider(value=30, min=5, max=150, step=5, description='Y Hist Bins:', layout=widgets.Layout(width='300px'))
 
     def reset_x_filters(b):
         '''Resets the X-axis filters to their maximum available limits.'''
-        
-        # Restores the X input values to the absolute min/max bounds established during the update step
+
+        # Assigns the absolute minimum allowed value to the horizontal minimum input
         x_min_input.value = x_min_input.min
+
+        # Assigns the absolute maximum allowed value to the horizontal maximum input
         x_max_input.value = x_max_input.max
 
     def reset_y_filters(b):
         '''Resets the Y-axis filters to their maximum available limits.'''
-        
-        # Restores the Y input values to the absolute min/max bounds established during the update step
+
+        # Assigns the absolute minimum allowed value to the vertical minimum input
         y_min_input.value = y_min_input.min
+
+        # Assigns the absolute maximum allowed value to the vertical maximum input
         y_max_input.value = y_max_input.max
 
-    # Binds the reset functions to the respective reset button click events
+    # Binds the horizontal reset function to the respective reset button click event
     x_reset_btn.on_click(reset_x_filters)
+
+    # Binds the vertical reset function to the respective reset button click event
     y_reset_btn.on_click(reset_y_filters)
 
-    # Groups the X and Y filters into horizontal box containers, initially hidden from view
+    # Groups the horizontal axis filters into a horizontal box container initially hidden from view
     x_filters = widgets.HBox([x_min_input, x_max_input, x_reset_btn], layout=widgets.Layout(display='none'))
+
+    # Groups the vertical axis filters into a horizontal box container initially hidden from view
     y_filters = widgets.HBox([y_min_input, y_max_input, y_reset_btn], layout=widgets.Layout(display='none'))
 
-    # Initialises the text input for filtering the available chips list
+    # Initialises the text input for dynamically filtering the available chips list
     chip_search = widgets.Text(placeholder='Filter available...', layout=widgets.Layout(width='95%'))
     
-    # Initialises the selection box for available chips
+    # Initialises the selection box for displaying available chips
     chip_select = widgets.Select(options=[], rows=5, layout=widgets.Layout(width='95%'))
     
-    # Groups the available chips search and select widgets into the left vertical panel
+    # Groups the available chips search and selection widgets into the left vertical panel
     left_panel = widgets.VBox([widgets.HTML('<b>Available Chips:</b>'), chip_search, chip_select], layout=widgets.Layout(width='40%'))
 
-    # Initialises the text input for filtering the excluded chips list
+    # Initialises the text input for dynamically filtering the excluded chips list
     excluded_search = widgets.Text(placeholder='Filter excluded...', layout=widgets.Layout(width='95%'))
     
-    # Initialises the selection box for excluded chips
+    # Initialises the selection box for displaying excluded chips
     excluded_select = widgets.Select(options=[], rows=5, layout=widgets.Layout(width='95%'))
     
-    # Groups the excluded chips search and select widgets into the right vertical panel
+    # Groups the excluded chips search and selection widgets into the right vertical panel
     right_panel = widgets.VBox([widgets.HTML('<b>Excluded Chips:</b>'), excluded_search, excluded_select], layout=widgets.Layout(width='40%'))
 
-    # Initialises the action buttons for moving chips between lists
+    # Initialises the action button to exclude a single highlighted chip
     exclude_btn = widgets.Button(description='Exclude >', button_style='warning', layout=widgets.Layout(width='120px'))
+
+    # Initialises the action button to exclude all currently valid chips
     exclude_all_btn = widgets.Button(description='Exclude All >>', button_style='danger', layout=widgets.Layout(width='120px'))
+
+    # Initialises the action button to re-add a single highlighted chip to the available pool
     readd_btn = widgets.Button(description='< Re-add', button_style='info', layout=widgets.Layout(width='120px'))
+
+    # Initialises the action button to clear all current exclusions
     reset_btn = widgets.Button(description='<< Reset All', button_style='success', layout=widgets.Layout(width='120px'))
     
     # Creates a blank HTML spacer to vertically align the action buttons with the adjacent text inputs
     button_spacer = widgets.HTML('<b>&nbsp;</b>')
     
-    # Groups the spacer and action buttons into the central vertical panel
+    # Groups the spacer and all action buttons into the central vertical panel
     button_panel = widgets.VBox([button_spacer, exclude_btn, exclude_all_btn, readd_btn, reset_btn], layout=widgets.Layout(width='20%', justify_content='flex-start', align_items='center'))
     
     def refresh_ui(*args):
         '''Updates both chip listboxes based on current exclusions and dynamically valid chips.'''
-        
-        # Extracts the lowercased search term from the available chips filter
+
+        # Extracts and converts the available chips search term to lowercase
         avail_term = chip_search.value.lower()
-        
-        # Populates the available chips list matching the search term and omitting excluded chips
+
+        # Filters and updates the available chips selection list based on exclusions and the search term
         chip_select.options = [c for c in state['valid_chips'] if c not in state['excluded_chips'] and avail_term in c.lower()]
         
-        # Extracts the lowercased search term from the excluded chips filter
+        # Extracts and converts the excluded chips search term to lowercase
         excl_term = excluded_search.value.lower()
-        
-        # Populates the excluded chips list matching the search term and containing only excluded valid chips
+
+        # Filters and updates the excluded chips selection list based on exclusions and the search term
         excluded_select.options = [c for c in state['valid_chips'] if c in state['excluded_chips'] and excl_term in c.lower()]
 
-    # Binds the user interface refresh function to changes in either chip search box
+    # Binds the refresh function to the available chips search input changes
     chip_search.observe(refresh_ui, names='value')
+
+    # Binds the refresh function to the excluded chips search input changes
     excluded_search.observe(refresh_ui, names='value')
 
     def exclude_selected(b):
         '''Excludes the currently highlighted chip from the available list.'''
-        
-        # Checks if a chip is selected in the available chips list
+
+        # Evaluates whether a valid chip is currently highlighted in the available list
         if chip_select.value:
-            
-            # Adds the selected chip to the exclusion set
+
+            # Adds the highlighted chip to the excluded chips tracking set
             state['excluded_chips'].add(chip_select.value)
-            
-            # Refreshes the shuttle lists and redraws the plot
+
+            # Refreshes the user interface to reflect the updated exclusion
             refresh_ui()
+
+            # Triggers a redrawing of the plots to exclude the selected data
             plot_data()
 
     def exclude_all_filtered(b):
-        '''Excludes all chips currently visible in the filtered available list.'''
+        '''Excludes all valid chips, regardless of the active search filter.'''
         
-        # Checks if there are any chips present in the filtered available list
-        if chip_select.options:
+        # Evaluates whether there are any valid chips currently in the dataset
+        if state['valid_chips']:
             
-            # Updates the exclusion set with all currently visible chips
-            state['excluded_chips'].update(chip_select.options)
+            # Adds all valid chips to the excluded chips tracking set
+            state['excluded_chips'].update(state['valid_chips'])
             
-            # Refreshes the shuttle lists and redraws the plot
+            # Refreshes the user interface to reflect the complete exclusion
             refresh_ui()
+
+            # Triggers a redrawing of the plots to exclude all data
             plot_data()
 
     def readd_selected(b):
         '''Restores the currently highlighted chip from the excluded list back to the active pool.'''
-        
-        # Checks if a chip is selected and verifies it exists in the exclusion set
+
+        # Evaluates whether a valid chip is currently highlighted in the excluded list and exists in the tracking set
         if excluded_select.value and excluded_select.value in state['excluded_chips']:
-            
-            # Removes the selected chip from the exclusion set
+
+            # Removes the highlighted chip from the excluded chips tracking set
             state['excluded_chips'].remove(excluded_select.value)
-            
-            # Refreshes the shuttle lists and redraws the plot
+
+            # Refreshes the user interface to reflect the restoration
             refresh_ui()
+
+            # Triggers a redrawing of the plots to include the restored data
             plot_data()
 
     def reset_exclusions(b):
         '''Clears all current exclusions and restores the default chip lists.'''
-        
-        # Checks if there are any chips currently excluded
+
+        # Evaluates whether any chips are currently excluded
         if state['excluded_chips']:
-            
-            # Clears the exclusion set entirely
+
+            # Clears the excluded chips tracking set
             state['excluded_chips'].clear()
-            
-            # Empties both search boxes to remove active filters
+
+            # Resets the available chips search input
             chip_search.value = ''
+
+            # Resets the excluded chips search input
             excluded_search.value = ''
-            
-            # Refreshes the shuttle lists and redraws the plot
+
+            # Refreshes the user interface to display default lists
             refresh_ui()
+
+            # Triggers a redrawing of the plots to include all data
             plot_data()
 
-    # Binds the exclusion and re-addition functions to their respective button click events
+    # Binds the exclusion function to the single exclude button click event
     exclude_btn.on_click(exclude_selected)
+
+    # Binds the batch exclusion function to the exclude all button click event
     exclude_all_btn.on_click(exclude_all_filtered)
+
+    # Binds the restoration function to the re-add button click event
     readd_btn.on_click(readd_selected)
+
+    # Binds the reset function to the reset exclusions button click event
     reset_btn.on_click(reset_exclusions)
 
     # Groups the left, middle, and right panels into the final horizontal exclusion control box
     exclusion_controls = widgets.HBox([left_panel, button_panel, right_panel], layout=widgets.Layout(border='1px solid #ddd', padding='10px', margin='10px 0px', width='100%'))
     
-    # Initialises the output widget for capturing and displaying the plotly figure
-    out = widgets.Output()
+    # Initialises the output widget for the primary scatter plot
+    out_scatter = widgets.Output()
+
+    # Initialises the output widget for the secondary distribution plots
+    out_dist = widgets.Output()
 
     def update_sources(*args):
-        '''Updates available data sources depending on the selected channel (removes Standard Curve for Ch2).'''
-        
-        # Exits the function if an update is already in progress
-        if state['updating']: return
-        
-        # Sets the updating flag to True to prevent recursive event firing
+        '''Updates available data sources depending on the selected channel.'''
+
+        # Evaluates whether an update operation is already in progress
+        if state['updating']: 
+
+            # Returns control to prevent recursive updates
+            return 
+
+        # Flags the state to indicate an active update operation
         state['updating'] = True
 
-        # Retrieves the currently selected channel
+        # Extracts the currently selected channel value
         ch = channel_dropdown.value
-        
-        # Removes the 'Standard Curve' option from the valid sources if Channel 2 is selected
+
+        # Determines the valid sources based on whether the secondary channel is explicitly selected
         valid_sources = [s for s in all_sources if s != 'Standard Curve'] if ch == 'Channel 2' else all_sources
         
-        # Caches the currently selected X and Y sources
-        curr_x, curr_y = x_source_drop.value, y_source_drop.value
+        # Extracts the current horizontal axis source value
+        curr_x = x_source_drop.value
 
-        # Updates the dropdown widget options with the valid sources
+        # Extracts the current vertical axis source value
+        curr_y = y_source_drop.value
+
+        # Updates the available options for the horizontal axis source dropdown
         x_source_drop.options = valid_sources
+
+        # Updates the available options for the vertical axis source dropdown
         y_source_drop.options = valid_sources
 
-        # Restores the previous selections if valid, otherwise defaults to the first available option
+        # Assigns the previous horizontal source if valid, otherwise falls back to the first available source
         x_source_drop.value = curr_x if curr_x in valid_sources else valid_sources[0]
+
+        # Assigns the previous vertical source if valid, otherwise falls back to the first available source
         y_source_drop.value = curr_y if curr_y in valid_sources else valid_sources[0]
 
-        # Resets the updating flag to False
+        # Flags the state to indicate the completion of the update operation
         state['updating'] = False
-        
-        # Triggers a downstream update of the feature dropdowns
+
+        # Triggers a cascading update of the dependent dropdown widgets
         update_dropdowns()
 
     def update_dropdowns(*args):
         '''Refreshes feature dropdown options after the selected sources change, applying the PrG filter if active.'''
-        
-        # Exits the function if an update is already in progress
-        if state['updating']: return
-        
-        # Sets the updating flag to True to prevent recursive event firing
+
+        # Evaluates whether an update operation is already in progress
+        if state['updating']: 
+
+            # Returns control to prevent recursive updates
+            return 
+
+        # Flags the state to indicate an active update operation
         state['updating'] = True
 
-        # Retrieves the current mode, channel, source, and filter values from the widgets
+        # Extracts the currently selected analysis mode
         mode = mode_toggle.value
+
+        # Extracts the currently selected channel value
         ch = channel_dropdown.value
-        x_src, y_src = x_source_drop.value, y_source_drop.value
+
+        # Assigns a fallback channel for extracting column names if both channels are selected
+        col_ch = 'Channel 1' if ch == 'Both' else ch
+        
+        # Extracts the currently selected horizontal axis source
+        x_src = x_source_drop.value
+
+        # Extracts the currently selected vertical axis source
+        y_src = y_source_drop.value
+
+        # Extracts the current state of the Protein G filter checkbox
         prg_only = prg_checkbox.value
 
-        # Ensures both X and Y sources are selected before extracting columns
+        # Evaluates whether both horizontal and vertical sources are selected
         if x_src and y_src:
-            
-            # Extracts column names directly from the nested dictionary structure
-            x_cols = list(data_catalog[mode][x_src][ch].columns)
-            y_cols = list(data_catalog[mode][y_src][ch].columns)
 
-            # Filters columns for PrG stages if the checkbox is ticked and the source is Immobilisation
+            # Extracts the available column names for the selected horizontal source
+            x_cols = list(data_catalog[mode][x_src][col_ch].columns)
+
+            # Extracts the available column names for the selected vertical source
+            y_cols = list(data_catalog[mode][y_src][col_ch].columns)
+
+            # Evaluates whether the Protein G filter is currently active
             if prg_only:
+
+                # Evaluates whether the horizontal source relates to immobilisation data
                 if 'Immob' in x_src:
+
+                    # Filters the horizontal column names to include only Protein G stages
                     x_cols = [col for col in x_cols if str(col).startswith('PrG')]
+
+                # Evaluates whether the vertical source relates to immobilisation data
                 if 'Immob' in y_src:
+
+                    # Filters the vertical column names to include only Protein G stages
                     y_cols = [col for col in y_cols if str(col).startswith('PrG')]
 
-            # Caches the currently selected metrics
+            # Extracts the current horizontal axis metric value
             curr_x_col = x_col_drop.value
+
+            # Extracts the current vertical axis metric value
             curr_y_col = y_col_drop.value
 
-            # Updates the metric dropdown options
+            # Updates the available options for the horizontal axis metric dropdown
             x_col_drop.options = x_cols
+
+            # Updates the available options for the vertical axis metric dropdown
             y_col_drop.options = y_cols
 
-            # Restores the previous metrics if valid, otherwise defaults to the first available option
+            # Assigns the previous horizontal metric if valid, otherwise falls back to the first available metric
             x_col_drop.value = curr_x_col if curr_x_col in x_cols else (x_cols[0] if x_cols else None)
+
+            # Assigns the previous vertical metric if valid, otherwise falls back to the first available metric
             y_col_drop.value = curr_y_col if curr_y_col in y_cols else (y_cols[0] if y_cols else None)
 
-        # Resets the updating flag to False
+        # Flags the state to indicate the completion of the update operation
         state['updating'] = False
-        
-        # Triggers a downstream update of the filter limit bounds
+
+        # Triggers a cascading update of the dynamic filter bounds
         update_filter_bounds()
 
     def update_filter_bounds(*args):
         '''Dynamically sets the absolute min/max limits ONLY for the axes that were just modified.'''
-        
-        # Exits the function if an update is already in progress
-        if state['updating']: return
-        
-        # Sets the updating flag to True to prevent recursive event firing
+
+        # Evaluates whether an update operation is already in progress
+        if state['updating']: 
+
+            # Returns control to prevent recursive updates
+            return 
+
+        # Flags the state to indicate an active update operation
         state['updating'] = True
 
-        # Retrieves the current core parameters from the widgets
+        # Extracts the currently selected analysis mode and channel
         mode, ch = mode_toggle.value, channel_dropdown.value
+
+        # Assigns a fallback channel for extracting limits if both channels are selected
+        col_ch = 'Channel 1' if ch == 'Both' else ch
+        
+        # Extracts the currently selected sources for both axes
         x_src, y_src = x_source_drop.value, y_source_drop.value
+
+        # Extracts the currently selected metrics for both axes
         x_col, y_col = x_col_drop.value, y_col_drop.value
 
-        # Determines if the X-axis parameters changed since the last update
+        # Determines whether the horizontal axis parameters have changed since the last update
         needs_x_update = (mode != state.get('last_mode') or ch != state.get('last_ch') or x_src != state.get('last_x_src') or x_col != state.get('last_x_col'))
-        
-        # Determines if the Y-axis parameters changed since the last update
+
+        # Determines whether the vertical axis parameters have changed since the last update
         needs_y_update = (mode != state.get('last_mode') or ch != state.get('last_ch') or y_src != state.get('last_y_src') or y_col != state.get('last_y_col'))
 
-        # Clears chip exclusions entirely if axis sources or channels have significantly changed
+        # Evaluates whether any relevant changes occurred subsequent to the initial load
         if (needs_x_update or needs_y_update) and state.get('last_mode') is not None:
-            
-            # Empties the exclusion set
+
+            # Clears the excluded chips tracking set
             state['excluded_chips'].clear()
-            
-            # Resets the exclusion search boxes
+
+            # Resets the available chips search input
             chip_search.value = ''
+
+            # Resets the excluded chips search input
             excluded_search.value = ''
 
-        # Defines a safe large numeric constant to bypass ipywidgets bounding validation errors
+        # Defines a large numerical constant to temporarily remove boundary limits
         LARGE_NUM = 1e30 
 
-        # Processes X-axis filter bounds if an update is needed
+        # Evaluates whether the horizontal axis filters require updating
         if needs_x_update:
-            
-            # Displays the X filter container layout
-            x_filters.layout.display = 'flex'
-            
-            # Evaluates the X column if one is selected
-            if x_col:
-                
-                # Retrieves the target dataframe
-                df_x = data_catalog[mode][x_src][ch]
-                
-                # Checks if the dataframe contains the target column
-                if not df_x.empty and x_col in df_x.columns:
-                    
-                    # Drops missing values from the target column
-                    x_data = df_x[x_col].dropna()
-                    
-                    # Updates the widget constraints if valid data remains
-                    if not x_data.empty:
-                        
-                        # Extracts the absolute minimum and maximum values as floats
-                        x_min, x_max = float(x_data.min()), float(x_data.max())
-                        
-                        # Applies a slight offset if min and max are identical to prevent rendering errors
-                        if x_min == x_max: x_max += 1e-9
 
-                        # Expands the widget min/max constraints to the temporary large numbers
+            # Displays the horizontal axis filter controls
+            x_filters.layout.display = 'flex'
+
+            # Checks whether a valid horizontal metric is selected
+            if x_col:
+
+                # Retrieves the target dataframe from the data catalog
+                df_x = data_catalog[mode][x_src][col_ch]
+
+                # Evaluates whether the target dataframe and metric column are valid
+                if not df_x.empty and x_col in df_x.columns:
+
+                    # Extracts the target horizontal data and drops any missing values
+                    x_data = df_x[x_col].dropna()
+
+                    # Evaluates whether the extracted horizontal data is populated
+                    if not x_data.empty:
+
+                        # Calculates the absolute minimum and maximum boundaries for the horizontal data
+                        x_min, x_max = float(x_data.min()), float(x_data.max())
+
+                        # Adjusts the maximum boundary slightly if it equals the minimum to prevent widget errors
+                        if x_min == x_max: 
+                            x_max += 1e-9
+
+                        # Temporarily expands the minimum input bounds to accept the new values
                         x_min_input.min, x_max_input.max = -LARGE_NUM, LARGE_NUM
+
+                        # Temporarily expands the maximum input bounds to accept the new values
                         x_max_input.min, x_min_input.max = -LARGE_NUM, LARGE_NUM
                         
-                        # Sets the widget values to the true data extremes
+                        # Assigns the calculated boundaries as the current input values
                         x_min_input.value, x_max_input.value = x_min, x_max
                         
-                        # Shrinks the widget constraints down to match the true data extremes
+                        # Restricts the minimum input bounds to the newly calculated limits
                         x_min_input.min, x_min_input.max = x_min, x_max
+
+                        # Restricts the maximum input bounds to the newly calculated limits
                         x_max_input.min, x_max_input.max = x_min, x_max
                         
-            # Saves the newly established X configuration to the state dictionary
+            # Records the updated horizontal source and metric into the state tracking dictionary
             state['last_x_src'], state['last_x_col'] = x_src, x_col
 
-        # Processes Y-axis filter bounds if an update is needed
+        # Evaluates whether the vertical axis filters require updating
         if needs_y_update:
-            
-            # Displays the Y filter container layout
-            y_filters.layout.display = 'flex'
-            
-            # Evaluates the Y column if one is selected
-            if y_col:
-                
-                # Retrieves the target dataframe
-                df_y = data_catalog[mode][y_src][ch]
-                
-                # Checks if the dataframe contains the target column
-                if not df_y.empty and y_col in df_y.columns:
-                    
-                    # Drops missing values from the target column
-                    y_data = df_y[y_col].dropna()
-                    
-                    # Updates the widget constraints if valid data remains
-                    if not y_data.empty:
-                        
-                        # Extracts the absolute minimum and maximum values as floats
-                        y_min, y_max = float(y_data.min()), float(y_data.max())
-                        
-                        # Applies a slight offset if min and max are identical to prevent rendering errors
-                        if y_min == y_max: y_max += 1e-9
 
-                        # Expands the widget min/max constraints to the temporary large numbers
+            # Displays the vertical axis filter controls
+            y_filters.layout.display = 'flex'
+
+            # Checks whether a valid vertical metric is selected
+            if y_col:
+
+                # Retrieves the target dataframe from the data catalog
+                df_y = data_catalog[mode][y_src][col_ch]
+
+                # Evaluates whether the target dataframe and metric column are valid
+                if not df_y.empty and y_col in df_y.columns:
+
+                    # Extracts the target vertical data and drops any missing values
+                    y_data = df_y[y_col].dropna()
+
+                    # Evaluates whether the extracted vertical data is populated
+                    if not y_data.empty:
+
+                        # Calculates the absolute minimum and maximum boundaries for the vertical data
+                        y_min, y_max = float(y_data.min()), float(y_data.max())
+
+                        # Adjusts the maximum boundary slightly if it equals the minimum to prevent widget errors
+                        if y_min == y_max: 
+                            y_max += 1e-9
+
+                        # Temporarily expands the minimum input bounds to accept the new values
                         y_min_input.min, y_max_input.max = -LARGE_NUM, LARGE_NUM
+
+                        # Temporarily expands the maximum input bounds to accept the new values
                         y_max_input.min, y_min_input.max = -LARGE_NUM, LARGE_NUM
                         
-                        # Sets the widget values to the true data extremes
+                        # Assigns the calculated boundaries as the current input values
                         y_min_input.value, y_max_input.value = y_min, y_max
                         
-                        # Shrinks the widget constraints down to match the true data extremes
+                        # Restricts the minimum input bounds to the newly calculated limits
                         y_min_input.min, y_min_input.max = y_min, y_max
+
+                        # Restricts the maximum input bounds to the newly calculated limits
                         y_max_input.min, y_max_input.max = y_min, y_max
                         
-            # Saves the newly established Y configuration to the state dictionary
+            # Records the updated vertical source and metric into the state tracking dictionary
             state['last_y_src'], state['last_y_col'] = y_src, y_col
 
-        # Saves the core overarching state parameters
+        # Records the updated mode and channel into the state tracking dictionary
         state['last_mode'], state['last_ch'] = mode, ch
-        
-        # Resets the updating flag to False
+
+        # Flags the state to indicate the completion of the update operation
         state['updating'] = False
         
-        # Triggers a downstream plot rendering update
+        # Triggers a redrawing of the plots reflecting the updated boundaries
         plot_data()
 
     def get_joined_data(mode, x_src, y_src, x_col, y_col, channel_label):
-        '''Joins selected dashboard fields and applies an optional channel filter.
+        '''Joins selected dashboard fields and applies an optional channel filter.'''
 
-        Args:
-            mode (str): Analysis mode selected in the dashboard.
-            x_src (str): Name of the requested X data source.
-            y_src (str): Name of the requested Y data source.
-            x_col (str): Feature column selected for the X-axis.
-            y_col (str): Feature column selected for the Y-axis.
-            channel_label (str): Optional channel label used to filter rows.
-
-        Returns:
-            pd.DataFrame: Joined, complete observations for the selected fields.
-        '''
-        
-        # Retrieves and copies the specific dataframes from the catalog using the channel label
+        # Retrieves a copy of the horizontal dataframe from the data catalog
         df_x = data_catalog[mode][x_src][channel_label].copy()
+
+        # Retrieves a copy of the vertical dataframe from the data catalog
         df_y = data_catalog[mode][y_src][channel_label].copy()
 
-        # Checks whether either dataframe is empty and returns an empty frame if so
+        # Evaluates whether either extracted dataframe is empty
         if df_x.empty or df_y.empty:
+
+            # Returns an empty dataframe indicating a joining failure
             return pd.DataFrame()
 
-        # Ensures all columns are strings to allow safe merging
+        # Casts the horizontal dataframe column names to strings to ensure consistent merging
         df_x.columns = df_x.columns.astype(str)
+
+        # Casts the vertical dataframe column names to strings to ensure consistent merging
         df_y.columns = df_y.columns.astype(str)
+
+        # Casts the targeted horizontal and vertical metric column names to strings
         x_col_str, y_col_str = str(x_col), str(y_col)
 
-        # Inner joins the dataframes on their index, applying suffixes for safety
+        # Merges the targeted columns from both dataframes into a single structure using an inner join
         df_merged = pd.merge(df_x[[x_col_str]], df_y[[y_col_str]], left_index=True, right_index=True, how='inner', suffixes=('_x', '_y'))
         
-        # Resolves dynamic column renaming if the X and Y columns share the same name
+        # Identifies the actual horizontal column name depending on potential suffixing during the merge
         actual_x_col = x_col_str + '_x' if x_col_str == y_col_str else x_col_str
+
+        # Identifies the actual vertical column name depending on potential suffixing during the merge
         actual_y_col = y_col_str + '_y' if x_col_str == y_col_str else y_col_str
         
-        # Renames the columns to standardised keys for downstream plotting
+        # Renames the merged columns to standard generic identifiers
         df_merged = df_merged.rename(columns={actual_x_col: 'x_val', actual_y_col: 'y_val'})
 
-        # Replaces infinities with NaNs and drops missing values before returning
+        # Replaces infinite values with missing representations and drops any incomplete rows
         return df_merged.replace([np.inf, -np.inf], np.nan).dropna()
 
     def plot_data(*args):
-        '''Creates the dashboard scatter plot and handles all active filters.'''
+        '''Calculates data for and constructs both the scatter plot and distribution subplots.'''
         
-        # Prevents redundant plotting cycles during chained updates
-        if state['updating']: return
+        # Evaluates whether an update operation is already in progress
+        if state['updating']: 
 
-        # Targets the output widget context manager
-        with out:
-            
-            # Clears the previous output before rendering the new plot
-            out.clear_output(wait=True)
-            
-            # Retrieves the current core parameters from the widgets
-            mode, channel = mode_toggle.value, channel_dropdown.value
-            x_src, y_src = x_source_drop.value, y_source_drop.value
-            x_col, y_col = x_col_drop.value, y_col_drop.value
+            # Returns control to prevent recursive drawing
+            return
 
-            # Validates that actual columns are selected before proceeding
-            if not x_col or not y_col:
-                
-                # Prints a warning message for invalid columns
-                print('Please select valid metrics to plot.')
-                
-                # Clears the valid chips tracker
-                state['valid_chips'] = []
-                
-                # Empties the chip selection UI
-                refresh_ui()
+        # Extracts the currently selected analysis mode and channel
+        mode, channel = mode_toggle.value, channel_dropdown.value
 
-                return
+        # Extracts the currently selected sources for both axes
+        x_src, y_src = x_source_drop.value, y_source_drop.value
 
-            # Creates a new Plotly figure object
-            fig = go.Figure()
-            
-            # Identifies the active channels based on the dropdown selection
-            channels_to_plot = ['Channel 1', 'Channel 2'] if channel == 'Both' else [channel]
-            
-            # Defines consistent colour mapping for the specific channels
-            colors = {'Channel 1': '#1f77b4', 'Channel 2': '#ff1e0e'}
-            
-            # Initialises a flag to track if any data was successfully plotted
-            plotted_any = False
+        # Extracts the currently selected metrics for both axes
+        x_col, y_col = x_col_drop.value, y_col_drop.value
 
-            # Initialises an empty set to collect valid chip IDs found during joining
-            current_valid_chips = set()
-            
-            # Initialises an empty dictionary to cache the joined datasets per channel
-            raw_dfs = {}
+        # Evaluates whether valid metrics are selected for both axes
+        if not x_col or not y_col:
 
-            # Loops through each channel to fetch and map available data dynamically
-            for ch in channels_to_plot:
-                
-                # Safely attempts to join and extract the necessary data for the channel
-                try:
-                    
-                    # Retrieves the merged dataset for the current axes and channel
-                    df = get_joined_data(mode, x_src, y_src, x_col, y_col, ch)
-                    
-                    # Verifies the dataset is not empty
-                    if not df.empty:
-                        
-                        # Caches the dataframe to prevent duplicate joining downstream
-                        raw_dfs[ch] = df
-                        
-                        # Adds the successfully joined chip indices to the master tracker
-                        current_valid_chips.update(df.index.astype(str).tolist())
-                        
-                # Silently catches and skips extraction errors
-                except Exception as e:
-                    continue
-            
-            # Updates the global valid chips state and sorts it alphabetically
-            state['valid_chips'] = sorted(list(current_valid_chips))
-            
-            # Cleans up the exclusions list to discard items that no longer exist in the new dataset
-            state['excluded_chips'] = {c for c in state['excluded_chips'] if c in state['valid_chips']}
-            
-            # Refreshes the shuttle list UI to reflect the available valid chips
+            # Clears the valid chips tracking list
+            state['valid_chips'] = []
+
+            # Refreshes the user interface to reflect the empty chip list
             refresh_ui()
 
-            # Loops through each channel again to apply filters and construct the scatter plot
-            for ch in channels_to_plot:
+            # Enters the context of the primary scatter plot widget
+            with out_scatter:
+
+                # Clears the existing scatter plot output
+                out_scatter.clear_output(wait=True)
+
+                # Prints an instructional message prompting valid metric selection
+                print('Please select valid metrics to plot.')
+
+            # Enters the context of the secondary distribution plots widget
+            with out_dist:
+
+                # Clears the existing distribution plots output
+                out_dist.clear_output(wait=True)
+
+            # Returns control to halt further plotting execution
+            return
+
+        # Determines the specific channels to plot based on the dropdown selection
+        channels_to_plot = ['Channel 1', 'Channel 2'] if channel == 'Both' else [channel]
+
+        # Defines a dictionary mapping distinct colours to each channel
+        colors = {'Channel 1': '#1f77b4', 'Channel 2': '#ff1e0e'}
+        
+        # Initialises an empty set to track valid chips for the current selection
+        current_valid_chips = set()
+
+        # Initialises an empty dictionary to temporarily store raw plotted dataframes
+        raw_dfs = {}
+
+        # Initialises an empty dictionary to store the final filtered dataframes
+        filtered_dfs = {}
+
+        # Loops through each specific channel targeted for plotting
+        for ch in channels_to_plot:
+
+            # Wraps the data extraction process in a try block to handle potential missing sources
+            try:
+
+                # Triggers the joining function to retrieve the combined data for the current channel
+                df = get_joined_data(mode, x_src, y_src, x_col, y_col, ch)
+
+                # Checks whether the extracted joined dataframe contains data
+                if not df.empty:
+
+                    # Maps the extracted dataframe to its corresponding channel in the raw data dictionary
+                    raw_dfs[ch] = df
+
+                    # Appends the chip identifiers present in the dataframe to the valid chips tracking set
+                    current_valid_chips.update(df.index.astype(str).tolist())
+
+            # Catches exceptions thrown during data retrieval without breaking the loop
+            except Exception as e:
+
+                # Proceeds to the next iteration
+                continue
+        
+        # Updates the state tracking list with the sorted valid chips
+        state['valid_chips'] = sorted(list(current_valid_chips))
+
+        # Cleans the excluded chips tracking set to remove identifiers no longer relevant to the selection
+        state['excluded_chips'] = {c for c in state['excluded_chips'] if c in state['valid_chips']}
+
+        # Refreshes the user interface to update the chip selection lists
+        refresh_ui()
+
+        # Initialises a boolean flag to track if any data is successfully plotted
+        plotted_any = False
+
+        # Loops through each channel targeted for plotting to apply active filters
+        for ch in channels_to_plot:
+
+            # Evaluates whether raw data was successfully compiled for the current channel
+            if ch not in raw_dfs: 
                 
-                # Skips the channel iteration if it lacks cached valid data
-                if ch not in raw_dfs: continue
-                
-                # Retrieves the target dataframe from the local cache
-                plot_df = raw_dfs[ch]
+                # Skips to the next channel iteration
+                continue
+            
+            # Extracts the compiled raw dataframe for the current channel
+            plot_df = raw_dfs[ch]
 
-                # Creates a baseline mask array allowing all data points through initially
-                mask = pd.Series(True, index=plot_df.index)
+            # Initialises a boolean mask populated with true values corresponding to the dataframe index
+            mask = pd.Series(True, index=plot_df.index)
 
-                # Applies the numeric X-axis widget filter thresholds to the mask
-                mask &= (plot_df['x_val'] >= x_min_input.value) & (plot_df['x_val'] <= x_max_input.value)
-                
-                # Applies the numeric Y-axis widget filter thresholds to the mask
-                mask &= (plot_df['y_val'] >= y_min_input.value) & (plot_df['y_val'] <= y_max_input.value)
+            # Updates the mask to filter horizontal values within the specified boundaries
+            mask &= (plot_df['x_val'] >= x_min_input.value) & (plot_df['x_val'] <= x_max_input.value)
 
-                # Checks if there are any specific chips selected for exclusion
-                if state['excluded_chips']:
-                    
-                    # Updates the mask to filter out rows whose indices match the excluded chips
-                    mask &= ~plot_df.index.astype(str).isin(state['excluded_chips'])
+            # Updates the mask to filter vertical values within the specified boundaries
+            mask &= (plot_df['y_val'] >= y_min_input.value) & (plot_df['y_val'] <= y_max_input.value)
 
-                # Applies the compiled boolean mask to the dataframe
-                plot_df = plot_df[mask]
+            # Evaluates whether any chips are currently selected for exclusion
+            if state['excluded_chips']:
 
-                # Skips the trace creation entirely if there are insufficient data points remaining
-                if len(plot_df) < 2: 
-                    continue
-                
-                # Sets the global plot flag to true indicating success
+                # Updates the mask to remove rows corresponding to the excluded chip identifiers
+                mask &= ~plot_df.index.astype(str).isin(state['excluded_chips'])
+
+            # Applies the aggregated boolean mask to filter the plot dataframe
+            plot_df = plot_df[mask]
+
+            # Evaluates whether the filtered dataframe retains sufficient data points for visualisation
+            if len(plot_df) >= 2: 
+
+                # Maps the filtered dataframe to its corresponding channel in the output dictionary
+                filtered_dfs[ch] = plot_df
+
+                # Sets the plotting flag to true indicating valid data is present
                 plotted_any = True
-                
-                # Extracts the isolated X and Y arrays for the plot
-                x_data, y_data = plot_df['x_val'], plot_df['y_val']
 
-                # Adds a scatter trace for the filtered points to the plotly figure
-                fig.add_trace(go.Scatter(x=x_data, y=y_data, mode='markers', name=f'{ch}', marker=dict(size=8, opacity=0.7, color=colors[ch], line=dict(width=1, color='DarkSlateGrey')), text=plot_df.index, hovertemplate='Chip ID: %{text}<br>X: %{x:.4f}<br>Y: %{y:.4f}<extra></extra>'))
+        # Checks whether the active filters removed all available data records
+        if not plotted_any:
 
-                # Verifies there is variance in the X data to calculate regression safely
-                if x_data.nunique() > 1:
-                    
-                    # Computes linear regression parameters using scipy stats
-                    slope, intercept, r_value, p_value, std_err = linregress(x_data, y_data)
-                    
-                    # Generates a sequence of points for drawing the linear fit
-                    x_fit = np.linspace(x_data.min(), x_data.max(), 100)
-                    y_fit = slope * x_fit + intercept
+            # Enters the context of the primary scatter plot widget
+            with out_scatter:
 
-                    # Adds the linear fit trace line to the plotly figure, formatting the legend text
-                    fig.add_trace(go.Scatter(x=x_fit, y=y_fit, mode='lines', name=f'{ch} Fit (r={r_value:.3f}, R^2={r_value**2:.3f})', line=dict(color=colors[ch], dash='dash', width=2), hoverinfo='skip'))
+                # Clears the existing scatter plot output
+                out_scatter.clear_output(wait=True)
 
-            # Checks if the plotting loop completed without rendering any data
-            if not plotted_any:
-                
-                # Prints an error advising the user to relax the filter criteria
+                # Prints an instructional message indicating insufficient data
                 print('Not enough matching chip records to plot these selections within the specified filter bounds.')
-                return
 
-            # Formats the dynamic figure title string
-            title = f'{y_src} [{y_col}] vs {x_src} [{x_col}]'
+            # Enters the context of the secondary distribution plots widget
+            with out_dist:
+
+                # Clears the existing distribution plots output
+                out_dist.clear_output(wait=True)
+
+            # Returns control to halt further plotting execution
+            return
+
+        # Initialises an empty Plotly figure object for the primary scatter plot
+        fig = go.Figure()
+
+        # Loops through each filtered dataframe prepared for plotting
+        for ch, plot_df in filtered_dfs.items():
+
+            # Extracts the targeted horizontal and vertical arrays from the filtered dataframe
+            x_data, y_data = plot_df['x_val'], plot_df['y_val']
+
+            # Adds a scatter trace plotting the extracted data points onto the figure
+            fig.add_trace(go.Scatter(
+                x=x_data, y=y_data, mode='markers', name=f'{ch}', 
+                marker=dict(size=8, opacity=0.7, color=colors[ch], line=dict(width=1, color='DarkSlateGrey')), 
+                text=plot_df.index, hovertemplate='Chip ID: %{text}<br>X: %{x:.4f}<br>Y: %{y:.4f}<extra></extra>'
+            ))
+
+            # Evaluates whether the horizontal data contains sufficient variance to calculate a linear fit
+            if x_data.nunique() > 1:
+
+                # Calculates the linear regression parameters spanning the scatter points
+                slope, intercept, r_value, p_value, std_err = linregress(x_data, y_data)
+
+                # Generates a dense array of linearly spaced horizontal coordinates bounding the data
+                x_fit = np.linspace(x_data.min(), x_data.max(), 100)
+
+                # Calculates the predicted vertical coordinates using the derived linear model
+                y_fit = slope * x_fit + intercept
+
+                # Adds a dashed line trace representing the linear fit onto the figure
+                fig.add_trace(go.Scatter(
+                    x=x_fit, y=y_fit, mode='lines', 
+                    name=f'{ch} Fit (r={r_value:.3f}, R^2={r_value**2:.3f})', 
+                    line=dict(color=colors[ch], dash='dash', width=2), hoverinfo='skip'
+                ))
+
+        # Constructs the title string incorporating the selected sources and metrics
+        title = f'{y_src} [{y_col}] vs {x_src} [{x_col}]'
+
+        # Updates the comprehensive layout and styling parameters of the scatter figure
+        fig.update_layout(title=title, xaxis_title=f'{x_src} : {x_col}', yaxis_title=f'{y_src} : {y_col}', template='plotly_white', height=600, margin=dict(l=40, r=40, t=60, b=40), hovermode='closest')
+        
+        # Initialises a complex Plotly subplots figure for the secondary distributions
+        dist_fig = make_subplots(
+            rows=2, cols=2, 
+            row_heights=[0.2, 0.8], 
+            shared_xaxes=True,
+            vertical_spacing=0.02,
+            subplot_titles=(f'{x_col} Distribution', f'{y_col} Distribution', '', '')
+        )
+
+        # Extracts the histogram bin counts designated by the slider widgets
+        x_bins = x_bins_slider.value
+        y_bins = y_bins_slider.value
+
+        # Loops through each filtered dataframe prepared for plotting
+        for ch, df in filtered_dfs.items():
+
+            # Adds a horizontal box plot for the primary axis distribution into the first subplot row
+            dist_fig.add_trace(go.Box(x=df['x_val'], name=ch, marker_color=colors[ch], showlegend=False), row=1, col=1)
+
+            # Adds a vertical box plot for the secondary axis distribution into the first subplot row
+            dist_fig.add_trace(go.Box(x=df['y_val'], name=ch, marker_color=colors[ch], showlegend=False), row=1, col=2)
             
-            # Updates the overarching layout settings and metadata for the final figure
-            fig.update_layout(title=title, xaxis_title=f'{x_src} : {x_col}', yaxis_title=f'{y_src} : {y_col}', template='plotly_white', height=600, margin=dict(l=40, r=40, t=60, b=40), hovermode='closest')
-            
-            # Renders the figure inside the output block
+            # Adds a horizontal histogram representing the primary axis density into the second subplot row
+            dist_fig.add_trace(go.Histogram(x=df['x_val'], nbinsx=x_bins, name=ch, marker_color=colors[ch], opacity=0.7, showlegend=False), row=2, col=1)
+
+            # Adds a vertical histogram representing the secondary axis density into the second subplot row
+            dist_fig.add_trace(go.Histogram(x=df['y_val'], nbinsx=y_bins, name=ch, marker_color=colors[ch], opacity=0.7, showlegend=False), row=2, col=2)
+
+        # Updates the comprehensive layout and styling parameters of the distribution figure
+        dist_fig.update_layout(barmode='overlay', template='plotly_white', height=400, margin=dict(l=40, r=40, t=40, b=40))
+
+        # Enters the context of the primary scatter plot widget
+        with out_scatter:
+
+            # Clears the existing scatter plot output
+            out_scatter.clear_output(wait=True)
+
+            # Renders the newly generated scatter figure
             fig.show()
 
-    # Binds the source update observer to changes in the channel dropdown
+        # Enters the context of the secondary distribution plots widget
+        with out_dist:
+
+            # Clears the existing distribution plots output
+            out_dist.clear_output(wait=True)
+
+            # Renders the newly generated distribution figure
+            dist_fig.show()
+
+    # Binds the source update function to the channel dropdown value changes
     channel_dropdown.observe(update_sources, 'value')
-    
-    # Binds the dropdown update observer to changes in the mode toggle, PrG checkbox, and axis source dropdowns
+
+    # Binds the dropdown update function to the analysis mode toggle changes
     mode_toggle.observe(update_dropdowns, 'value')
+
+    # Binds the dropdown update function to the Protein G filter checkbox changes
     prg_checkbox.observe(update_dropdowns, 'value')
+
+    # Binds the dropdown update function to the horizontal axis source dropdown changes
     x_source_drop.observe(update_dropdowns, 'value')
+
+    # Binds the dropdown update function to the vertical axis source dropdown changes
     y_source_drop.observe(update_dropdowns, 'value')
     
-    # Binds the filter bound update observer to changes in the target metric selections
+    # Binds the boundary update function to the horizontal axis metric dropdown changes
     x_col_drop.observe(update_filter_bounds, 'value')
+
+    # Binds the boundary update function to the vertical axis metric dropdown changes
     y_col_drop.observe(update_filter_bounds, 'value')
     
-    # Binds the plot redraw observer directly to changes in the bounded range input widgets
+    # Binds the plot redrawing function to the horizontal minimum boundary changes
     x_min_input.observe(plot_data, 'value')
+
+    # Binds the plot redrawing function to the horizontal maximum boundary changes
     x_max_input.observe(plot_data, 'value')
+
+    # Binds the plot redrawing function to the vertical minimum boundary changes
     y_min_input.observe(plot_data, 'value')
+
+    # Binds the plot redrawing function to the vertical maximum boundary changes
     y_max_input.observe(plot_data, 'value')
+    
+    # Binds the plot redrawing function to the horizontal and vertical histogram bins slider changes
+    x_bins_slider.observe(plot_data, 'value')
+    y_bins_slider.observe(plot_data, 'value')
 
-    # Groups all configured user interface elements into the master vertical container
-    controls = widgets.VBox([top_controls, channel_dropdown, widgets.HBox([x_source_drop, x_col_drop]), x_filters, widgets.HBox([y_source_drop, y_col_drop]), y_filters, exclusion_controls])
+    # Groups all upper interface control elements into a master vertical container
+    controls = widgets.VBox([
+        top_controls, 
+        channel_dropdown, 
+        widgets.HBox([x_source_drop, x_col_drop]), 
+        x_filters, 
+        widgets.HBox([y_source_drop, y_col_drop]), 
+        y_filters, 
+        exclusion_controls
+    ])
+    
+    # Wraps the histogram bins sliders within an aligned horizontal box for layout styling
+    bins_container = widgets.HBox([x_bins_slider, y_bins_slider], layout=widgets.Layout(padding='10px', justify_content='space-around'))
 
-    # Displays the dashboard title header element
+    # Displays the dashboard title header with defined styling
     display(widgets.HTML(f"<h3 style='margin-bottom:0px; color:#0000FF;'>Master Chip Comparison Dashboard</h3>"))
-    
-    # Displays the master interface container and the integrated output display block
-    display(controls, out)
-    
-    # Triggers the initial orchestration update to populate parameters and render the first plot
-    update_sources()
 
+    # Renders the sequential layout of control containers and plot outputs
+    display(controls, out_scatter, bins_container, out_dist)
+    
+    # Triggers the initial cascading source update to populate dropdowns and render the first plot
+    update_sources()
+    
 def get_top_drivers(df, chip_id, top_n=3):
     '''Identifies the features that most strongly distinguish a chip from its peers.
 
