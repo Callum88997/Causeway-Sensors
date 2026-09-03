@@ -790,16 +790,16 @@ def get_related_columns(query_col, abs_cols, change_cols, intra_cols):
 
     return result
 
-def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=6, final_stage=None, debug_chip='B72604R8146'):
+def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=3, critical_stages=None, debug_chip='B72604R8015'):
     '''Identifies chips that failed absolute, delta and intra metrics on the same underlying base stages.
     
     Args:
         flags_abs (pd.DataFrame): The dataframe tracking absolute stage failures.
         flags_delta (pd.DataFrame): The dataframe tracking delta transition failures.
         flags_intra (pd.DataFrame): The dataframe tracking intra-stage dynamic failures.
-        min_overlaps (int, optional): The minimum number of intersecting failure modes required. Defaults to 2.
-        final_stage (str, optional): The identifier for the terminal stage. Defaults to None.
-        debug_chip (str, optional): A specific chip ID to print diagnostic tracing for. Defaults to 'B72604B146'.
+        min_overlaps (int, optional): The minimum number of intersecting failure modes required. Defaults to 3.
+        critical_stages (list, optional): The identifiers for terminal stages (e.g., last 2). Defaults to None.
+        debug_chip (str, optional): A specific chip ID to print diagnostic tracing for. Defaults to 'B72604R8015'.
         
     Returns:
         list: A list of chip IDs flagged as ensemble failures.
@@ -808,10 +808,12 @@ def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=6, f
     # Initialises an empty list to store chips that fail across multiple paradigms
     ensemble_chips = []
 
-    # Checks if a final stage is unassigned and the absolute flags dataframe is populated
-    if final_stage is None and not flags_abs.empty:
-        # Assigns the last evaluated column in the absolute flags matrix as the final stage
-        final_stage = flags_abs.columns[-1]
+    # Checks if critical stages are unassigned and the absolute flags dataframe is populated
+    if critical_stages is None and not flags_abs.empty:
+        # Assigns the last 2 evaluated columns (or just 1 if only 1 exists) in the absolute flags matrix
+        critical_stages = flags_abs.columns[-2:].tolist() if len(flags_abs.columns) >= 2 else flags_abs.columns.tolist()
+    elif critical_stages is None:
+        critical_stages = []
 
     # Extracts full column lists to pass to the relationship mapper
     abs_cols = flags_abs.columns.tolist()
@@ -824,9 +826,7 @@ def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=6, f
         stage_map[stage] = get_related_columns(stage, abs_cols, change_cols, intra_cols)
 
     # Identifies initial candidate chips by finding the union of chips failing at least once in ANY mode
-    candidate_chips = set(flags_abs.index[flags_abs.any(axis=1)]) | \
-                      set(flags_delta.index[flags_delta.any(axis=1)]) | \
-                      set(flags_intra.index[flags_intra.any(axis=1)])
+    candidate_chips = set(flags_abs.index[flags_abs.any(axis=1)]) | set(flags_delta.index[flags_delta.any(axis=1)]) | set(flags_intra.index[flags_intra.any(axis=1)])
 
     if debug_chip and debug_chip not in candidate_chips:
         print(f"\n DIAGNOSTIC ALERT: Chip '{debug_chip}' did not flag an anomaly in ANY of the three datasets.")
@@ -871,14 +871,14 @@ def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=6, f
                 for c_col in rels['Change_Columns']:
                     if c_col in flags_delta.columns and flags_delta.loc[chip, c_col] == 1:
                         failed_in_delta = True
-                        break # One failure is enough to flag the dataset for this stage
+                        break 
                         
             # 3. Checks if the chip failed ANY of the related Intra columns
             if chip in flags_intra.index:
                 for i_col in rels['Intra_Columns']:
                     if i_col in flags_intra.columns and flags_intra.loc[chip, i_col] == 1:
                         failed_in_intra = True
-                        break # One failure is enough to flag the dataset for this stage
+                        break 
 
             # Counts how many datasets flagged a failure for this specific stage
             datasets_failed = sum([failed_in_abs, failed_in_delta, failed_in_intra])
@@ -897,26 +897,28 @@ def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=6, f
                 else:
                     print(f"       Datasets Failed: {datasets_failed} -> DOES NOT meet 2-out-of-3 rule. Stage ignored.")
 
+        # Check if the chip failed in any of the last 2 stages
+        failed_critical = any(stage in failed_stages for stage in critical_stages)
+
         # --- DIAGNOSTIC BLOCK 3: Final Intersection Criteria ---
         if is_debug:
             print(f"\n3. Final Decision Criteria:")
             print(f"   - Total failed stages (2/3 rule): {len(failed_stages)} (Minimum required: {min_overlaps})")
-            print(f"   - Final stage bypass allowed if in: '{final_stage}'")
+            print(f"   - Critical stages bypass allowed if in: {critical_stages}")
             
-            if len(failed_stages) >= min_overlaps or (final_stage in failed_stages):
+            if len(failed_stages) >= min_overlaps or failed_critical:
                 print(f"    RESULT: Chip {debug_chip} PASSES ensemble check (FLAGGED as anomaly).")
             else:
                 print(f"    RESULT: Chip {debug_chip} FAILED ensemble check. Not enough stages met the criteria.")
             print(f"{'='*70}\n")
 
-        # Evaluates if the total failed stages meet the minimum threshold or target the final stage
-        if len(failed_stages) >= min_overlaps or (final_stage in failed_stages):
+        # Evaluates if the total failed stages meet the minimum threshold or target the last 2 stages
+        if len(failed_stages) >= min_overlaps or failed_critical:
             # Appends the confirmed chip to the final ensemble failures list
             ensemble_chips.append(chip)
             
     # Returns the list containing all identified ensemble failure chips
     return ensemble_chips
-
 
 
 
