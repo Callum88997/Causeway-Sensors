@@ -2550,7 +2550,9 @@ def run_standard_curve_analysis(standard_curves_df):
         duplicate_count = standard_curves_df['standard_curve_uuid'].duplicated().sum()
 
         # Displays the total count of duplicated UUIDs
-        print('Duplicated standard curve UUIDs:', duplicate_count)
+        print('Duplicated standard curve UUIDs: ', duplicate_count)
+
+        print('Number of unique Chip IDs:', standard_curves_df['chip_id'].nunique())
 
         def parse_delimited(s):
             '''Parses a delimited string field into a list of numeric values.
