@@ -207,39 +207,39 @@ def summarise_correlations(corr_matrix, label, num=3):
         # Prints the paired stages and their correlation value
         print(f'  - {s1} & {s2} (r = {val:.3f})')
 
-def analyse_anomaly_drivers(df, anomalies_df, label, num=3):
+def analyse_anomaly_drivers(df, anomalies_df, label, num=3, use_ensemble=True, ensemble_chips=None):
     '''Compares anomalous chips to normal chips to identify which stages drive the anomaly.
 
     Args:
         df (pd.DataFrame): The original dataframe containing the stage data.
-        anomalies_df (pd.DataFrame): The dataframe containing anomaly scores and labels.
+        anomalies_df (pd.DataFrame): The dataframe containing individual anomaly scores and labels.
         label (str): The prefix label for the summary output.
         num (int, optional): The number of top driving stages to display. Defaults to 3.
+        use_ensemble (bool, optional): If True, uses ensemble_chips for analysis. Defaults to True.
+        ensemble_chips (list, optional): List of ensemble failed chip IDs.
     '''
 
-    # Extracts the indices corresponding to anomalous outliers
-    outliers = anomalies_df[anomalies_df['anomaly'] == -1].index
+    # Determines which set of outliers and normals to use based on the toggle
+    if use_ensemble and ensemble_chips is not None:
+        outliers = df.index.intersection(ensemble_chips)
+        normals = df.index.difference(ensemble_chips)
+        mode_label = "Ensemble"
+    else:
+        outliers = anomalies_df[anomalies_df['anomaly'] == -1].index
+        normals = anomalies_df[anomalies_df['anomaly'] == 1].index
+        mode_label = "Isolated"
 
-    # Extracts the indices corresponding to normal chips
-    normals = anomalies_df[anomalies_df['anomaly'] == 1].index
-
-    # Prints the anomaly breakdown header formatted with the provided label
-    print(f'\n {label} Anomaly Stage Breakdown')
+    # Prints the anomaly breakdown header formatted with the provided label and mode
+    print(f'\n {label} Anomaly Stage Breakdown ({mode_label} Mode)')
 
     # Checks if there are no outliers detected in the dataset
     if len(outliers) == 0:
-
-        # Prints a message confirming normal bounds
         print('No anomalies detected. All chips are behaving within normal bounds.')
-        
         return
 
     # Checks if there is a sufficient baseline of normal chips for comparison
     if len(normals) < 2:
-
-        # Prints a warning about the lack of baseline data
         print('Not enough normal chips to form a baseline for comparison.')
-        
         return
 
     # Slices the source dataframe to isolate the normal data subset
@@ -265,14 +265,8 @@ def analyse_anomaly_drivers(df, anomalies_df, label, num=3):
 
     # Loops through the top z-scores to output the specific anomaly drivers
     for stage, z in z_scores.head(num).items():
-
-        # Extracts the normal average for the current stage
         norm_val = normal_mean[stage]
-
-        # Extracts the anomalous average for the current stage
         anom_val = anomaly_mean[stage]
-
-        # Prints the comparative breakdown and z-score for the stage
         print(f'  - {stage}: Anomaly Avg = {anom_val:.3f} | Normal Avg = {norm_val:.3f} (Z-Score: {z:.2f})')
 
 def create_wide_intra(intra_df, val_col, keep_metrics=['std', 'slope', 'range', 'skew']):
@@ -679,7 +673,7 @@ def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=1):
     # Returns the compiled list containing all identified ensemble failure chips
     return ensemble_chips
 
-def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col='quad_ch1_change', intra_val_col=None, title='PEL Analysis'):
+def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col='quad_ch1_change', intra_val_col=None, title='PEL Analysis', use_ensemble=True):
     '''Analyses PEL signals, stage deltas, and intra-stage kinetics for anomalies.
 
     Args:
@@ -756,7 +750,7 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
         print(f'\nPotential Anomalous Chips (Absolute): {len(outliers_abs)}')
 
         # Analyses and prints the specific stages driving the absolute signal anomalies
-        analyse_anomaly_drivers(wide_events, anomalies_abs, f'PEL {val_col} Absolute Signal')
+        analyse_anomaly_drivers(wide_events, anomalies_abs, f'PEL {val_col} Absolute Signal', use_ensemble=use_ensemble, ensemble_chips=ensemble_failed_chips)
 
     # Displays the stage delta results in a collapsible output section
     with collapsible_output(f'{title} - Stage Delta'):
@@ -783,7 +777,7 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
         print(f'\nPotential Anomalous Chips (Delta): {len(outliers_delta)}')
 
         # Analyses and prints the specific stages driving the stage delta anomalies
-        analyse_anomaly_drivers(wide_changes, anomalies_delta, f'PEL {change_col} Stage Delta')
+        analyse_anomaly_drivers(wide_changes, anomalies_delta, f'PEL {change_col} Stage Delta', use_ensemble=use_ensemble, ensemble_chips=ensemble_failed_chips)
     
     # Displays the intra-stage kinetics results in a collapsible output section
     with collapsible_output(f'{title} - Intra-stage Kinetics'):
@@ -810,12 +804,12 @@ def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col=
         print(f'\nPotential Anomalous Chips (Intra-stage Kinetics): {len(outliers_intra)}')
 
         # Analyses and prints the specific stages driving the intra-stage kinetic anomalies
-        analyse_anomaly_drivers(wide_intra, anomalies_intra, f'PEL {intra_target} Intra-stage Kinetics')
+        analyse_anomaly_drivers(wide_intra, anomalies_intra, f'PEL {intra_target} Intra-stage Kinetics', use_ensemble=use_ensemble, ensemble_chips=ensemble_failed_chips)
 
     # Returns the generated wide tables and their corresponding outlier lists
     return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra, ensemble_failed_chips
 
-def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='channel1', change_col='channel1_change', intra_val_col=None, title='Immobilisation Analysis'):
+def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='channel1', change_col='channel1_change', intra_val_col=None, title='Immobilisation Analysis', use_ensemble=True):
     '''Analyses one immobilisation split across signal, delta, and kinetic features.
 
     Args:
@@ -893,7 +887,7 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
         print(f'\nPotential Anomalous Chips (Absolute): {len(outliers_abs)}')
 
         # Analyses and prints the specific stages driving the absolute signal anomalies
-        analyse_anomaly_drivers(wide_events, anomalies_abs, f'Immob [{split_name}] {val_col} Absolute Signal')
+        analyse_anomaly_drivers(wide_events, anomalies_abs, f'Immob [{split_name}] {val_col} Absolute Signal', use_ensemble=use_ensemble, ensemble_chips=ensemble_failed_chips)
 
     # Displays the stage delta results in a collapsible output section
     with collapsible_output(f'{title} - Stage Delta'):
@@ -917,7 +911,7 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
         print(f'\nPotential Anomalous Chips (Delta): {len(outliers_delta)}')
 
         # Analyses and prints the specific stages driving the stage delta anomalies
-        analyse_anomaly_drivers(wide_changes, anomalies_delta, f'Immob [{split_name}] {change_col} Stage Delta')
+        analyse_anomaly_drivers(wide_changes, anomalies_delta, f'Immob [{split_name}] {change_col} Stage Delta', use_ensemble=use_ensemble, ensemble_chips=ensemble_failed_chips)
     
     # Displays the intra-stage kinetics results in a collapsible output section
     with collapsible_output(f'{title} - Intra-stage Kinetics'):
@@ -941,7 +935,7 @@ def analyse_immob_split(events_df, changes_df, intra_df, split_name, val_col='ch
         print(f'\nPotential Anomalous Chips (Intra-stage Kinetics): {len(outliers_intra)}')
 
         # Analyses and prints the specific stages driving the intra-stage kinetic anomalies
-        analyse_anomaly_drivers(wide_intra, anomalies_intra, f'Immob [{split_name}] {intra_target} Intra-stage Kinetics')
+        analyse_anomaly_drivers(wide_intra, anomalies_intra, f'Immob [{split_name}] {intra_target} Intra-stage Kinetics', use_ensemble=use_ensemble, ensemble_chips=ensemble_failed_chips)
     
     # Returns the generated wide tables and their corresponding outlier lists
     return wide_events, wide_changes, wide_intra, outliers_abs, outliers_delta, outliers_intra, ensemble_failed_chips
