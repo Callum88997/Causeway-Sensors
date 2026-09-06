@@ -374,7 +374,7 @@ def get_outlier_chips(anomalies_df):
     # Returns the standard index as a list
     return outliers.index.tolist()
 
-"""def get_related_columns(query_col, abs_cols, change_cols, intra_cols):
+def get_related_columns(query_col, abs_cols, change_cols, intra_cols):
     '''A unified method to find all related columns across Absolute, Change, and Intra datasets.
     
     Args:
@@ -414,11 +414,14 @@ def get_outlier_chips(anomalies_df):
         # Loops through each column in the change columns list to find the parent
         for c_col in change_cols:
 
-            # Evaluates whether the query string starts with the current change column prefix
-            if query_str.startswith(f"{c_col}_"):
+            # Casts the current change column to a string
+            c_str = str(c_col)
+
+            # Evaluates whether the query string exactly matches or starts with the current change column prefix
+            if query_str == c_str or query_str.startswith(f"{c_str}_"):
 
                 # Assigns the matched change column as the base reference
-                base_change_col = str(c_col)
+                base_change_col = c_str
 
                 # Breaks the loop once the parent change column is successfully identified
                 break
@@ -462,7 +465,7 @@ def get_outlier_chips(anomalies_df):
         # Checks whether the base change column contains a custom shift identifier
         elif '_to_' in base_change_col:
 
-            # Strips the custom prefix prefixes from the column string
+            # Strips the custom prefixes from the column string
             clean_col = base_change_col.replace('Net_Shift_', '').replace('Total_Shift_', '')
 
             # Splits the cleaned column string at the custom transition identifier
@@ -485,7 +488,7 @@ def get_outlier_chips(anomalies_df):
 
     # Evaluates whether the detected type is an absolute column to populate change relationships
     if result['Detected_Type'] == 'Absolute':
-        
+
         # Initialises an empty list to store matching change columns
         matched_changes = []
 
@@ -510,7 +513,7 @@ def get_outlier_chips(anomalies_df):
             # Checks whether the current change column contains a custom shift identifier
             elif '_to_' in c_str:
 
-                # Strips the custom prefix prefixes from the column string
+                # Strips the custom prefixes from the column string
                 clean_col = c_str.replace('Net_Shift_', '').replace('Total_Shift_', '')
 
                 # Splits the string and strips whitespace to extract the component parts
@@ -536,15 +539,15 @@ def get_outlier_chips(anomalies_df):
 
     # Evaluates whether the detected type is an absolute column to populate intra-stage relationships
     if result['Detected_Type'] == 'Absolute':
-        
+
         # Initialises an empty list to store matching intra-stage columns
         matched_intras = []
 
         # Loops through each matched change column identified in the previous step
         for matched_c in result['Change_Columns']:
 
-            # Finds and appends all intra-stage columns derived from the current matched change column
-            matched_intras.extend([i for i in intra_cols if str(i).startswith(f"{matched_c}_")])
+            # Finds and appends all intra-stage columns derived from or exactly matching the current change column
+            matched_intras.extend([i for i in intra_cols if i == matched_c or str(i).startswith(f"{matched_c}_")])
 
         # Assigns the compiled list of matched intra-stage columns to the result dictionary
         result['Intra_Columns'] = matched_intras
@@ -555,21 +558,20 @@ def get_outlier_chips(anomalies_df):
         # Evaluates whether a base change column was successfully identified
         if base_change_col:
 
-            # Finds and assigns all intra-stage columns derived from the base change column
-            result['Intra_Columns'] = [i for i in intra_cols if str(i).startswith(f"{base_change_col}_")]
+            # Finds and assigns all intra-stage columns derived from or exactly matching the base change column
+            result['Intra_Columns'] = [i for i in intra_cols if i == base_change_col or str(i).startswith(f"{base_change_col}_")]
 
     # Returns the fully populated relationships dictionary
     return result
-"""
-"""def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=2, final_stage=None):
+
+def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=1):
     '''Identifies chips that failed absolute, delta and intra metrics on the same underlying base stages.
     
     Args:
         flags_abs (pd.DataFrame): The dataframe tracking absolute stage failures.
         flags_delta (pd.DataFrame): The dataframe tracking delta transition failures.
         flags_intra (pd.DataFrame): The dataframe tracking intra-stage dynamic failures.
-        min_overlaps (int, optional): The minimum number of intersecting failure modes required. Defaults to 2.
-        final_stage (str, optional): The identifier for the terminal stage. Defaults to None.
+        min_overlaps (int, optional): The minimum number of intersecting failure modes required. Defaults to 1.
         
     Returns:
         list: A list of chip IDs flagged as ensemble failures.
@@ -578,349 +580,104 @@ def get_outlier_chips(anomalies_df):
     # Initialises an empty list to store chips that fail across multiple paradigms
     ensemble_chips = []
 
-    # Checks if a final stage is unassigned and the absolute flags dataframe is populated
-    if final_stage is None and not flags_abs.empty:
+    # Extracts and assigns only the final evaluated column in the absolute flags matrix
+    critical_stages = flags_abs.columns[-1:].tolist()
 
-        # Assigns the last evaluated column in the absolute flags matrix as the final stage
-        final_stage = flags_abs.columns[-1]
-
-
-
-    debug_chip = 'B72604R8146'
-    # --- DIAGNOSTIC BLOCK 1: Matrix Presence ---
-    if debug_chip:
-        print(f"\n--- ENSEMBLE DIAGNOSTIC TRACE: {debug_chip} ---")
-        
-        # Extract the exact column names where this chip flagged a '1'
-        failed_abs = flags_abs.columns[flags_abs.loc[debug_chip] == 1].tolist() if debug_chip in flags_abs.index else []
-        failed_delta = flags_delta.columns[flags_delta.loc[debug_chip] == 1].tolist() if debug_chip in flags_delta.index else []
-        failed_intra = flags_intra.columns[flags_intra.loc[debug_chip] == 1].tolist() if debug_chip in flags_intra.index else []
-        
-        print("1. Matrix-level Flags (Exact columns the chip failed):")
-        print(f"   - Absolute: {failed_abs if failed_abs else 'None'}")
-        print(f"   - Delta:    {failed_delta if failed_delta else 'None'}")
-        print(f"   - Intra:    {failed_intra if failed_intra else 'None'}")
-        
-        if not (failed_abs and failed_delta and failed_intra):
-            print("\n FAILURE CAUSE: The chip was dropped at step 1. To even be considered a candidate, a chip MUST fail at least one metric in ALL THREE matrices.")
-
-
-
-    
-    # Identifies initial candidate chips by finding the intersection of chips failing at least once in all three modes
-    candidate_chips = set(flags_abs.index[flags_abs.any(axis=1)]) & set(flags_delta.index[flags_delta.any(axis=1)]) & set(flags_intra.index[flags_intra.any(axis=1)])
-                      
-    # Loops through each intersected candidate chip
-    for chip in candidate_chips:
-        
-        # Extracts a set of base stages where the chip triggered absolute failures
-        abs_nodes = set(flags_abs.columns[flags_abs.loc[chip] == 1])
-        
-        # Initialises an empty set to collect stages implicated in delta transition failures
-        delta_nodes = set()
-
-        # Loops through the specific columns where the chip failed delta checks
-        for col in flags_delta.columns[flags_delta.loc[chip] == 1]:
-
-            # Checks if the delta column represents a transition arrow
-            if '->' in str(col):
-
-                # Splits the transition string into its origin and destination stages
-                parts = str(col).split('->')
-
-                # Cleans and injects both stages into the delta nodes tracking set
-                delta_nodes.update([parts[0].strip(), parts[1].strip()])
-        
-        # Initialises an empty set to collect stages implicated in intra-stage dynamic failures
-        intra_nodes = set()
-
-        # Loops through the specific columns where the chip failed intra checks
-        for col in flags_intra.columns[flags_intra.loc[chip] == 1]:
-
-            # Checks if the intra column represents a transition arrow
-            if '->' in str(col):
-
-                # Splits the transition string into its origin and destination stages
-                parts = str(col).split('->')
-
-                # Extracts and strips the primary origin node
-                node1 = parts[0].strip()
-
-                # Extracts the destination node, stripping off any appended metric suffixes
-                node2 = parts[1].split('_')[0].strip() 
-
-                # Injects both cleaned stages into the intra nodes tracking set
-                intra_nodes.update([node1, node2])
-
-            else:
-
-                # Handles fallback for static stages by stripping off the metric suffix
-                intra_nodes.add(str(col).split('_')[0].strip())
-
-        # Computes the intersection of specific base stages failing across all three evaluation matrices
-        #overlapping_stages = abs_nodes & delta_nodes & intra_nodes
-        overlapping_stages = (abs_nodes & delta_nodes) | (abs_nodes & intra_nodes) | (delta_nodes & intra_nodes)
-
-
-
-        if debug_chip and chip == debug_chip:
-            print("\n2. Base Stages Extracted (Stripped of suffixes/transitions):")
-            print(f"   - Absolute nodes: {abs_nodes}")
-            print(f"   - Delta nodes:    {delta_nodes}")
-            print(f"   - Intra nodes:    {intra_nodes}")
-            print(f"\n3. Intersection (Stages failing in AT LEAST 2 of 3 domains):")
-            print(f"   - 2-out-of-3 failed stages: {overlapping_stages}")
-            print(f"\n4. Final Decision Criteria:")
-            print(f"   - Failed stages count: {len(overlapping_stages)} (Minimum required: {min_overlaps})")
-            print(f"   - Final stage bypass allowed if in: '{final_stage}'")
-            
-            if len(overlapping_stages) >= min_overlaps or (final_stage in overlapping_stages):
-                print("    RESULT: Chip passes ensemble check (FLAGGED as anomaly).")
-            else:
-                print("    RESULT: Chip failed ensemble check. It did not have enough stages failing the 2-out-of-3 rule.")
-
-
-
-
-        # Evaluates if the stage intersection meets the minimum threshold or explicitly targets the final stage
-        if len(overlapping_stages) >= min_overlaps or (final_stage in overlapping_stages):
-
-            # Appends the confirmed chip to the final ensemble failures list
-            ensemble_chips.append(chip)
-            
-    # Returns the list containing all identified ensemble failure chips
-    return ensemble_chips
-"""
-
-
-def get_related_columns(query_col, abs_cols, change_cols, intra_cols):
-    '''A unified method to find all related columns across Absolute, Change, and Intra datasets.
-    
-    Args:
-        query_col (str): The column name you want to look up.
-        abs_cols (list): List of all Absolute column names.
-        change_cols (list): List of all Change/Delta column names.
-        intra_cols (list): List of all Intra-stage column names.
-        
-    Returns:
-        dict: A dictionary containing the detected type and its linked columns across all sets.
-    '''
-    
-    query_str = str(query_col).strip()
-    
-    result = {
-        'Query': query_str,
-        'Detected_Type': None,
-        'Absolute_Columns': [],
-        'Change_Columns': [],
-        'Intra_Columns': []
-    }
-    
-    base_change_col = None
-    extracted_nodes = []
-
-    # Evaluates whether the query string exists within the intra-stage columns list
-    if query_str in intra_cols:
-        result['Detected_Type'] = 'Intra'
-        # Loops through each column in the change columns list to find the parent
-        for c_col in change_cols:
-            c_str = str(c_col)
-            # FIX: Checks for exact match OR a suffix match
-            if query_str == c_str or query_str.startswith(f"{c_str}_"):
-                base_change_col = c_str
-                break
-                
-    elif query_str in change_cols:
-        result['Detected_Type'] = 'Change'
-        base_change_col = query_str
-        
-    elif query_str in abs_cols:
-        result['Detected_Type'] = 'Absolute'
-        extracted_nodes = [query_str]
-        
-    else:
-        return {"Error": f"Column '{query_str}' not found in any provided list."}
-    
-    # Evaluates whether a base change column was successfully identified
-    if base_change_col:
-        if '->' in base_change_col:
-            parts = base_change_col.split('->')
-            extracted_nodes = [parts[0].strip(), parts[1].strip()]
-        elif '_to_' in base_change_col:
-            clean_col = base_change_col.replace('Net_Shift_', '').replace('Total_Shift_', '')
-            parts = clean_col.split('_to_')
-            extracted_nodes = [parts[0].strip(), parts[1].strip()]
-
-    # Absolute Relationships
-    if result['Detected_Type'] == 'Absolute':
-        result['Absolute_Columns'] = [query_str]
-    else:
-        result['Absolute_Columns'] = [n for n in extracted_nodes if n in abs_cols]
-
-    # Change Relationships
-    if result['Detected_Type'] == 'Absolute':
-        matched_changes = []
-        for c_col in change_cols:
-            c_str = str(c_col)
-            if '->' in c_str:
-                parts = [p.strip() for p in c_str.split('->')]
-                if query_str in parts:
-                    matched_changes.append(c_str)
-            elif '_to_' in c_str:
-                clean_col = c_str.replace('Net_Shift_', '').replace('Total_Shift_', '')
-                parts = [p.strip() for p in clean_col.split('_to_')]
-                if query_str in parts:
-                    matched_changes.append(c_str)
-        result['Change_Columns'] = matched_changes
-    else:
-        if base_change_col in change_cols:
-            result['Change_Columns'] = [base_change_col]
-
-    # Intra Relationships
-    if result['Detected_Type'] == 'Absolute':
-        matched_intras = []
-        for matched_c in result['Change_Columns']:
-            # FIX: Grabs the exact match (flags df) OR the suffix match (raw df)
-            matched_intras.extend([i for i in intra_cols if i == matched_c or str(i).startswith(f"{matched_c}_")])
-        result['Intra_Columns'] = matched_intras
-    else:
-        if base_change_col:
-            # FIX: Grabs the exact match OR the suffix match
-            result['Intra_Columns'] = [i for i in intra_cols if i == base_change_col or str(i).startswith(f"{base_change_col}_")]
-
-    return result
-
-def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=3, critical_stages=None, debug_chip='B72604R8015'):
-    '''Identifies chips that failed absolute, delta and intra metrics on the same underlying base stages.
-    
-    Args:
-        flags_abs (pd.DataFrame): The dataframe tracking absolute stage failures.
-        flags_delta (pd.DataFrame): The dataframe tracking delta transition failures.
-        flags_intra (pd.DataFrame): The dataframe tracking intra-stage dynamic failures.
-        min_overlaps (int, optional): The minimum number of intersecting failure modes required. Defaults to 3.
-        critical_stages (list, optional): The identifiers for terminal stages (e.g., last 2). Defaults to None.
-        debug_chip (str, optional): A specific chip ID to print diagnostic tracing for. Defaults to 'B72604R8015'.
-        
-    Returns:
-        list: A list of chip IDs flagged as ensemble failures.
-    '''
-    
-    # Initialises an empty list to store chips that fail across multiple paradigms
-    ensemble_chips = []
-
-    # Checks if critical stages are unassigned and the absolute flags dataframe is populated
-    if critical_stages is None and not flags_abs.empty:
-        # Assigns the last 2 evaluated columns (or just 1 if only 1 exists) in the absolute flags matrix
-        critical_stages = flags_abs.columns[-2:].tolist() if len(flags_abs.columns) >= 2 else flags_abs.columns.tolist()
-    elif critical_stages is None:
-        critical_stages = []
-
-    # Extracts full column lists to pass to the relationship mapper
+    # Extracts the full list of absolute columns to pass to the relationship mapper
     abs_cols = flags_abs.columns.tolist()
+
+    # Extracts the full list of change columns to pass to the relationship mapper
     change_cols = flags_delta.columns.tolist()
+
+    # Extracts the full list of intra-stage columns to pass to the relationship mapper
     intra_cols = flags_intra.columns.tolist()
 
-    # Pre-computes the relationships for every base stage using the unified method
+    # Initialises an empty dictionary to pre-compute relationships for every base stage
     stage_map = {}
+
+    # Loops through each absolute stage column
     for stage in abs_cols:
+
+        # Computes and maps the related columns for the current absolute stage
         stage_map[stage] = get_related_columns(stage, abs_cols, change_cols, intra_cols)
 
-    # Identifies initial candidate chips by finding the union of chips failing at least once in ANY mode
+    # Identifies initial candidate chips by finding the union of chips failing at least once in any mode
     candidate_chips = set(flags_abs.index[flags_abs.any(axis=1)]) | set(flags_delta.index[flags_delta.any(axis=1)]) | set(flags_intra.index[flags_intra.any(axis=1)])
 
-    if debug_chip and debug_chip not in candidate_chips:
-        print(f"\n DIAGNOSTIC ALERT: Chip '{debug_chip}' did not flag an anomaly in ANY of the three datasets.")
-        print("It is completely mathematically normal according to the Isolation Forest and is not a candidate for ensemble failure.\n")
-
-    # Loops through each candidate chip
+    # Loops through each identified candidate chip
     for chip in candidate_chips:
 
-        is_debug = (chip == debug_chip)
-
-        # Initialises a set to track which master stages failed the 2-out-of-3 rule
+        # Initialises an empty set to track master stages that failed the intersection rule
         failed_stages = set()
-
-        if is_debug:
-            print(f"\n{'='*70}")
-            print(f"--- ENSEMBLE DIAGNOSTIC TRACE: {debug_chip} ---")
-            print(f"{'='*70}")
-            
-            failed_abs = flags_abs.columns[flags_abs.loc[debug_chip] == 1].tolist() if debug_chip in flags_abs.index else []
-            failed_delta = flags_delta.columns[flags_delta.loc[debug_chip] == 1].tolist() if debug_chip in flags_delta.index else []
-            failed_intra = flags_intra.columns[flags_intra.loc[debug_chip] == 1].tolist() if debug_chip in flags_intra.index else []
-            
-            print("1. Matrix-level Flags (Exact columns the chip failed):")
-            print(f"   - Absolute ({len(failed_abs)}): {failed_abs if failed_abs else 'None'}")
-            print(f"   - Delta    ({len(failed_delta)}): {failed_delta if failed_delta else 'None'}")
-            print(f"   - Intra    ({len(failed_intra)}): {failed_intra if failed_intra else 'None'}")
-            print("\n2. Stage-by-Stage Evaluation (Showing ONLY stages where chip flagged at least one metric):")
 
         # Loops through every master stage and its mapped relationships
         for stage, rels in stage_map.items():
             
+            # Initialises a boolean flag to track failure in the absolute dataset
             failed_in_abs = False
+
+            # Initialises a boolean flag to track failure in the delta dataset
             failed_in_delta = False
+
+            # Initialises a boolean flag to track failure in the intra-stage dataset
             failed_in_intra = False
             
-            # 1. Checks if the chip failed this specific Absolute stage
+            # Evaluates whether the chip failed the specific absolute stage
             if chip in flags_abs.index and flags_abs.loc[chip, stage] == 1:
+
+                # Updates the absolute failure flag to true
                 failed_in_abs = True
                 
-            # 2. Checks if the chip failed ANY of the related Delta/Change columns
+            # Evaluates whether the chip exists in the delta flags dataframe
             if chip in flags_delta.index:
+
+                # Loops through each related change column
                 for c_col in rels['Change_Columns']:
+
+                    # Evaluates whether the chip failed the current related change column
                     if c_col in flags_delta.columns and flags_delta.loc[chip, c_col] == 1:
+
+                        # Updates the delta failure flag to true
                         failed_in_delta = True
+
+                        # Breaks the loop once a delta failure is confirmed
                         break 
                         
-            # 3. Checks if the chip failed ANY of the related Intra columns
+            # Evaluates whether the chip exists in the intra-stage flags dataframe
             if chip in flags_intra.index:
+
+                # Loops through each related intra-stage column
                 for i_col in rels['Intra_Columns']:
+
+                    # Evaluates whether the chip failed the current related intra-stage column
                     if i_col in flags_intra.columns and flags_intra.loc[chip, i_col] == 1:
+
+                        # Updates the intra-stage failure flag to true
                         failed_in_intra = True
+
+                        # Breaks the loop once an intra-stage failure is confirmed
                         break 
 
-            # Counts how many datasets flagged a failure for this specific stage
+            # Calculates the total number of datasets flagging a failure for the current stage
             datasets_failed = sum([failed_in_abs, failed_in_delta, failed_in_intra])
             
-            # If the stage failed in at least 2 datasets, add it to the failed stages set
-            if datasets_failed >= 2:
+            # Evaluates whether the stage failed across all three evaluated datasets
+            if datasets_failed == 3:
+
+                # Appends the fully failed stage to the tracking set
                 failed_stages.add(stage)
 
-            if is_debug and datasets_failed > 0:
-                print(f"\n   -> Master Stage: '{stage}'")
-                print(f"      Mapped Change Cols : {rels['Change_Columns']}")
-                print(f"      Mapped Intra Cols  : {rels['Intra_Columns']}")
-                print(f"      [Flags triggered] -> Absolute: {failed_in_abs} | Change: {failed_in_delta} | Intra: {failed_in_intra}")
-                if datasets_failed >= 2:
-                    print(f"       Datasets Failed: {datasets_failed} -> MEETS 2-out-of-3 rule. Stage '{stage}' added to failure count.")
-                else:
-                    print(f"       Datasets Failed: {datasets_failed} -> DOES NOT meet 2-out-of-3 rule. Stage ignored.")
-
-        # Check if the chip failed in any of the last 2 stages
+        # Evaluates whether the chip failed any of the defined critical stages
         failed_critical = any(stage in failed_stages for stage in critical_stages)
 
-        # --- DIAGNOSTIC BLOCK 3: Final Intersection Criteria ---
-        if is_debug:
-            print(f"\n3. Final Decision Criteria:")
-            print(f"   - Total failed stages (2/3 rule): {len(failed_stages)} (Minimum required: {min_overlaps})")
-            print(f"   - Critical stages bypass allowed if in: {critical_stages}")
-            
-            if len(failed_stages) >= min_overlaps or failed_critical:
-                print(f"    RESULT: Chip {debug_chip} PASSES ensemble check (FLAGGED as anomaly).")
-            else:
-                print(f"    RESULT: Chip {debug_chip} FAILED ensemble check. Not enough stages met the criteria.")
-            print(f"{'='*70}\n")
-
-        # Evaluates if the total failed stages meet the minimum threshold or target the last 2 stages
+        # Evaluates whether the total failed stages meet the minimum threshold or target critical stages
         if len(failed_stages) >= min_overlaps or failed_critical:
+
             # Appends the confirmed chip to the final ensemble failures list
             ensemble_chips.append(chip)
             
-    # Returns the list containing all identified ensemble failure chips
+    # Returns the compiled list containing all identified ensemble failure chips
     return ensemble_chips
-
-
 
 def analyse_pel(events_df, changes_df, intra_df, val_col='quad_ch1', change_col='quad_ch1_change', intra_val_col=None, title='PEL Analysis'):
     '''Analyses PEL signals, stage deltas, and intra-stage kinetics for anomalies.
