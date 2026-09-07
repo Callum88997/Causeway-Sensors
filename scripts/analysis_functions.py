@@ -665,7 +665,7 @@ def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=1):
         failed_critical = any(stage in failed_stages for stage in critical_stages)
 
         # Evaluates whether the total failed stages meet the minimum threshold or target critical stages
-        if len(failed_stages) >= min_overlaps or failed_critical:
+        if len(failed_stages) >= min_overlaps:#or failed_critical:
 
             # Appends the confirmed chip to the final ensemble failures list
             ensemble_chips.append(chip)
@@ -2424,12 +2424,13 @@ def create_interactive_dashboard(data_catalog):
     # Triggers the initial cascading source update to populate dropdowns and render the first plot
     update_sources()
     
-def get_top_drivers(df, chip_id, top_n=3):
+def get_top_drivers(df, chip_id, outliers=None, top_n=3):
     '''Identifies the features that most strongly distinguish a chip from its peers.
 
     Args:
         df (pd.DataFrame): Feature table indexed by chip identifier.
         chip_id (str): Identifier of the chip to investigate.
+        outliers (list | None, optional): List of known outlier chip identifiers. Defaults to None.
         top_n (int, optional): Number of highest-impact features to return. Defaults to 3.
 
     Returns:
@@ -2442,16 +2443,43 @@ def get_top_drivers(df, chip_id, top_n=3):
         # Returns a not-applicable string message within a list
         return ['N/A (Chip not in dataset)']
     
-    # Calculates the statistical mean across all chips in the dataframe
-    mean = df.mean()
+    # Evaluates whether an explicit list of outliers is provided to isolate a clean baseline
+    if outliers is not None:
+        
+        # Identifies the healthy baseline chips by excluding the known outliers from the index
+        normals = df.index.difference(outliers)
+        
+        # Evaluates whether there are enough normal chips to form a reliable baseline
+        if len(normals) >= 2:
 
-    # Calculates the standard deviation across all chips, replacing zeros to prevent division errors
-    std = df.std().replace(0, 1e-9)
+            # Calculates the baseline mean using only the healthy normal chips
+            baseline_mean = df.loc[normals].mean()
 
-    # Calculates the absolute z-scores for the selected chip and drops any missing values
-    z_scores = ((df.loc[chip_id] - mean) / std).abs().dropna()
+            # Calculates the baseline standard deviation, replacing zeros to prevent division errors
+            baseline_std = df.loc[normals].std().replace(0, 1e-9)
+            
+        # Handles cases where the normal baseline is too small for standard statistics
+        else:
 
-    # Checks whether the calculated z-scores series contains data
+            # Calculates the robust baseline mean using the median of the entire dataframe
+            baseline_mean = df.median()
+
+            # Calculates the robust baseline standard deviation using the median absolute deviation
+            baseline_std = ((df - baseline_mean).abs().median() * 1.4826).replace(0, 1e-9)
+
+    # Handles cases where no outlier list is provided
+    else:
+
+        # Calculates the robust baseline mean using the median of the entire dataframe
+        baseline_mean = df.median()
+
+        # Calculates the robust baseline standard deviation using the median absolute deviation
+        baseline_std = ((df - baseline_mean).abs().median() * 1.4826).replace(0, 1e-9)
+
+    # Calculates the absolute z-scores for the selected chip against the derived baseline and drops missing values
+    z_scores = ((df.loc[chip_id] - baseline_mean) / baseline_std).abs().dropna()
+
+    # Evaluates whether the calculated z-scores series contains data
     if z_scores.empty: 
 
         # Returns a standard not-applicable string within a list
@@ -2720,17 +2748,29 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
 
                     # Prints a message indicating missing data for the dataset
                     print(f'  [{ds_name}] No valid outlier data available.\n')
+
                     continue
 
-                # Calculates the global statistical mean across all chips in the dataframe
-                mean = df_source.mean()
+                # Identifies the healthy baseline chips by excluding the valid outliers
+                normals = df_source.index.difference(valid_outliers)
+                
+                # Ensures there is a sufficient baseline for comparison
+                if len(normals) < 2:
+                    
+                    # Prints a message indicating insufficient baseline data
+                    print(f'  [{ds_name}] Not enough normal chips to form a baseline.\n')
 
-                # Calculates the global standard deviation, replacing zeros to prevent division errors
-                std = df_source.std().replace(0, 1e-9)
+                    continue
+
+                # Calculates the statistical mean exclusively on the healthy baseline
+                normal_mean = df_source.loc[normals].mean()
+
+                # Calculates the standard deviation exclusively on the healthy baseline, replacing zeros
+                normal_std = df_source.loc[normals].std().replace(0, 1e-9)
                 
-                # Calculates the absolute z-scores exclusively for the valid outlier chips
-                z_scores = ((df_source.loc[valid_outliers] - mean) / std).abs()
-                
+                # Calculates Z-scores for the outliers against the isolated healthy baseline
+                z_scores = ((df_source.loc[valid_outliers] - normal_mean) / normal_std).abs()
+
                 # Calculates the average, minimum, and maximum z-score across the outliers for each stage
                 avg_z_scores = z_scores.mean(axis=0).dropna()
                 min_z_scores = z_scores.min(axis=0)
@@ -2775,7 +2815,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
             return
 
         # Extracts the list of feature columns from the master dataframe
-        features = master_df.columns.tolist()
+        features = [col for col in master_df.columns if col != 'Cluster']
 
         # Creates a boolean mask identifying rows with complete feature data
         valid_rows = master_df[features].notna().all(axis=1)
@@ -2892,7 +2932,7 @@ def generate_at_risk_summary(master_df, sc_metrics, sc_raw_df, all_at_risk_chips
 
                     # Loops through each dataset to extract the top distinct drivers
                     for ds_name, df_source in dfs.items():
-                        drivers_info[section_name][ds_name] = get_top_drivers(df_source, chip)
+                        drivers_info[section_name][ds_name] = get_top_drivers(df_source, chip, outliers=outlier_list)
             
             # Initialises an empty list to assemble the formatted standard curve data
             sc_data = []
