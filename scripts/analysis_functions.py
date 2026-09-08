@@ -665,7 +665,7 @@ def get_ensemble_failures(flags_abs, flags_delta, flags_intra, min_overlaps=1):
         failed_critical = any(stage in failed_stages for stage in critical_stages)
 
         # Evaluates whether the total failed stages meet the minimum threshold or target critical stages
-        if len(failed_stages) >= min_overlaps:#or failed_critical:
+        if len(failed_stages) >= min_overlaps:
 
             # Appends the confirmed chip to the final ensemble failures list
             ensemble_chips.append(chip)

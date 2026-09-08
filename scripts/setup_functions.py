@@ -1811,7 +1811,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
         flags_PEL_df (pd.DataFrame): Processed PEL flag records.
 
     Returns:
-        tuple: PEL event, change, intra-stage, and normalised.
+        tuple: PEL event, change, intra-stage, and normalised datasets.
     '''
 
     # Initialises the quality check collapsible output widget
@@ -2058,6 +2058,38 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
         # Renders the change metrics summary dataframe
         display(change_summary_PEL)
 
+    # Concatenates all individual intra-stage feature dataframes
+    pel_intra_df = pd.concat(all_intrastage_PEL, ignore_index=True) if all_intrastage_PEL else pd.DataFrame()
+
+    if not pel_intra_df.empty:
+        # Identifies feature columns excluding identifiers
+        intra_cols = [c for c in pel_intra_df.columns if c not in ['chip_id', 'stage']]
+
+        # Enforces numeric data types across all feature columns
+        for col in intra_cols:
+            pel_intra_df[col] = pd.to_numeric(pel_intra_df[col], errors='coerce')
+
+        # Preserves sequential stage ordering directly from the actual data to avoid NaN conversion
+        actual_stages = [s for s in pel_intra_df['stage'].unique() if pd.notna(s)]
+        pel_intra_df['stage'] = pd.Categorical(pel_intra_df['stage'], categories=actual_stages, ordered=True)
+
+        # Computes mean and standard deviation grouped by stage
+        grouped = pel_intra_df.groupby('stage', observed=False)[intra_cols].agg(['mean', 'std'])
+
+        # Constructs the Mean ± Std formatted summary table
+        pel_intra_summary = pd.DataFrame(index=grouped.index)
+        for col in intra_cols:
+            means = grouped[(col, 'mean')].round(3).astype(str)
+            stds = grouped[(col, 'std')].round(3).astype(str)
+            # Uses unicode \u00b1 to avoid encoding glitches like Â±
+            pel_intra_summary[col] = means + " \u00b1 " + stds
+
+        pel_intra_summary = pel_intra_summary.reset_index()
+
+        # Displays the summary table in a collapsible output container
+        with collapsible_output('PEL Stage Intra Metrics Summary'):
+            display(pel_intra_summary)
+
     # Loops through each channel to generate specific statistical summaries
     for ch in channels:
 
@@ -2074,10 +2106,7 @@ def run_pel_analysis(pel_upload_df, sensorgram_dfs, flags_PEL_df):
             plot_all_statistics(all_events_PEL_norm_df, 'stage', ch, ylabel=f'{ch} Normalised Signal', title_prefix=f'Normalised - {ch}')
 
             # Generates the statistical plots for the delta signals
-            plot_all_statistics(change_PEL_df, 'stage', f'{ch}_change', ylabel=f'Delta {ch} Signal', title_prefix=f'Delta - {ch}')
-
-    # Concatenates all individual intra-stage feature dataframes into a single consolidated dataframe
-    pel_intra_df = pd.concat(all_intrastage_PEL, ignore_index=True)            
+            plot_all_statistics(change_PEL_df, 'stage', f'{ch}_change', ylabel=f'Delta {ch} Signal', title_prefix=f'Delta - {ch}')           
 
     # Returns the consolidated event, change, intra-stage, and normalised dataframes
     return all_events_PEL_df, change_PEL_df, pel_intra_df, all_events_PEL_norm_df
@@ -2425,7 +2454,39 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
 
     # Generates and displays the immediate stage change metrics summary
     imp_change_df = generate_and_display_summary(all_changes_imp, change_cols, 'Immediate: Stage Changes', drop_na_col=change_cols[0])
-    
+
+    # Concatenates all immediate intra-stage feature dataframes
+    imp_intra_df = pd.concat(all_intra_imp, ignore_index=True) if all_intra_imp else pd.DataFrame()
+
+    if not imp_intra_df.empty:
+        # Identifies feature columns excluding identifiers
+        intra_cols = [c for c in imp_intra_df.columns if c not in ['chip_id', 'stage']]
+
+        # Enforces numeric data types across all feature columns
+        for col in intra_cols:
+            imp_intra_df[col] = pd.to_numeric(imp_intra_df[col], errors='coerce')
+
+        # Preserves sequential stage ordering directly from the actual data to avoid NaN conversion
+        actual_stages = [s for s in imp_intra_df['stage'].unique() if pd.notna(s)]
+        imp_intra_df['stage'] = pd.Categorical(imp_intra_df['stage'], categories=actual_stages, ordered=True)
+
+        # Computes mean and standard deviation grouped by stage
+        grouped = imp_intra_df.groupby('stage', observed=False)[intra_cols].agg(['mean', 'std'])
+
+        # Constructs the Mean ± Std formatted summary table
+        immob_intra_summary = pd.DataFrame(index=grouped.index)
+        for col in intra_cols:
+            means = grouped[(col, 'mean')].round(3).astype(str)
+            stds = grouped[(col, 'std')].round(3).astype(str)
+            # Uses unicode \u00b1 to avoid encoding glitches like Â±
+            immob_intra_summary[col] = means + " \u00b1 " + stds
+
+        immob_intra_summary = immob_intra_summary.reset_index()
+
+        # Displays the summary table in a collapsible output container
+        with collapsible_output('Immob Stage Intra Metrics Summary'):
+            display(immob_intra_summary)
+
     # Generates and displays the combined stage metrics summary
     comb_df = generate_and_display_summary(all_events_comb, channels, 'Combined Reagents: Metrics by Stage')
 
@@ -2435,9 +2496,40 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
     # Generates and displays the combined stage change metrics summary
     comb_change_df = generate_and_display_summary(all_changes_comb, change_cols, 'Combined Reagents: Stage Changes', drop_na_col=change_cols[0])
 
+    # Concatenates all combined intra-stage feature dataframes
+    comb_intra_df = pd.concat(all_intra_comb, ignore_index=True) if all_intra_comb else pd.DataFrame()
+
+    if not comb_intra_df.empty:
+        # Identifies feature columns excluding identifiers
+        intra_cols = [c for c in comb_intra_df.columns if c not in ['chip_id', 'stage']]
+
+        # Enforces numeric data types across all feature columns
+        for col in intra_cols:
+            comb_intra_df[col] = pd.to_numeric(comb_intra_df[col], errors='coerce')
+
+        # Preserves sequential stage ordering directly from actual data
+        actual_stages = [s for s in comb_intra_df['stage'].unique() if pd.notna(s)]
+        comb_intra_df['stage'] = pd.Categorical(comb_intra_df['stage'], categories=actual_stages, ordered=True)
+
+        # Computes mean and standard deviation grouped by stage
+        grouped = comb_intra_df.groupby('stage', observed=False)[intra_cols].agg(['mean', 'std'])
+
+        # Constructs the Mean ± Std formatted summary table
+        immob_comb_intra_summary = pd.DataFrame(index=grouped.index)
+        for col in intra_cols:
+            means = grouped[(col, 'mean')].round(3).astype(str)
+            stds = grouped[(col, 'std')].round(3).astype(str)
+            immob_comb_intra_summary[col] = means + " \u00b1 " + stds
+
+        immob_comb_intra_summary = immob_comb_intra_summary.reset_index()
+
+        # Displays the summary table in a collapsible output container
+        with collapsible_output('Immob Combined Stage Intra Metrics Summary'):
+            display(immob_comb_intra_summary)
+
     # Concatenates all immediate intra-stage feature dataframes if populated, else assigns an empty dataframe
     imp_intra_df = pd.concat(all_intra_imp, ignore_index=True) if all_intra_imp else pd.DataFrame()
-
+    
     # Concatenates all combined intra-stage feature dataframes if populated, else assigns an empty dataframe
     comb_intra_df = pd.concat(all_intra_comb, ignore_index=True) if all_intra_comb else pd.DataFrame()
 
@@ -2458,7 +2550,38 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
 
         # Generates and displays the averaged immediate stage change metrics summary
         avg_imp_change_df = generate_and_display_summary(all_changes_avg_imp, change_cols, '5s Avg: Stage Changes', drop_na_col=change_cols[0])
-        
+
+        # Concatenates all 5s averaged immediate intra-stage feature dataframes
+        avg_imp_intra_df = pd.concat(all_intra_avg_imp, ignore_index=True) if all_intra_avg_imp else pd.DataFrame()
+
+        if not avg_imp_intra_df.empty:
+            # Identifies feature columns excluding identifiers
+            intra_cols = [c for c in avg_imp_intra_df.columns if c not in ['chip_id', 'stage']]
+
+            # Enforces numeric data types across all feature columns
+            for col in intra_cols:
+                avg_imp_intra_df[col] = pd.to_numeric(avg_imp_intra_df[col], errors='coerce')
+
+            # Preserves sequential stage ordering directly from actual data
+            actual_stages = [s for s in avg_imp_intra_df['stage'].unique() if pd.notna(s)]
+            avg_imp_intra_df['stage'] = pd.Categorical(avg_imp_intra_df['stage'], categories=actual_stages, ordered=True)
+
+            # Computes mean and standard deviation grouped by stage
+            grouped = avg_imp_intra_df.groupby('stage', observed=False)[intra_cols].agg(['mean', 'std'])
+
+            # Constructs the Mean ± Std formatted summary table
+            avg_imp_intra_summary = pd.DataFrame(index=grouped.index)
+            for col in intra_cols:
+                means = grouped[(col, 'mean')].round(3).astype(str)
+                stds = grouped[(col, 'std')].round(3).astype(str)
+                avg_imp_intra_summary[col] = means + " \u00b1 " + stds
+
+            avg_imp_intra_summary = avg_imp_intra_summary.reset_index()
+
+            # Displays the summary table in a collapsible output container
+            with collapsible_output('Immob 5s Avg Stage Intra Metrics Summary'):
+                display(avg_imp_intra_summary)
+
         # Generates and displays the averaged combined stage metrics summary
         avg_comb_df = generate_and_display_summary(all_events_avg_comb, channels, '5s Avg Combined Reagents: Metrics by Stage')
 
@@ -2467,6 +2590,37 @@ def run_immob_analysis(immob_df, immobilisation_dfs, flags_dfs, averaged_flags_d
 
         # Generates and displays the averaged combined stage change metrics summary
         avg_comb_change_df = generate_and_display_summary(all_changes_avg_comb, change_cols, '5s Avg Combined Reagents: Stage Changes', drop_na_col=change_cols[0])
+
+        # Concatenates all 5s averaged combined intra-stage feature dataframes
+        avg_comb_intra_df = pd.concat(all_intra_avg_comb, ignore_index=True) if all_intra_avg_comb else pd.DataFrame()
+
+        if not avg_comb_intra_df.empty:
+            # Identifies feature columns excluding identifiers
+            intra_cols = [c for c in avg_comb_intra_df.columns if c not in ['chip_id', 'stage']]
+
+            # Enforces numeric data types across all feature columns
+            for col in intra_cols:
+                avg_comb_intra_df[col] = pd.to_numeric(avg_comb_intra_df[col], errors='coerce')
+
+            # Preserves sequential stage ordering directly from actual data
+            actual_stages = [s for s in avg_comb_intra_df['stage'].unique() if pd.notna(s)]
+            avg_comb_intra_df['stage'] = pd.Categorical(avg_comb_intra_df['stage'], categories=actual_stages, ordered=True)
+
+            # Computes mean and standard deviation grouped by stage
+            grouped = avg_comb_intra_df.groupby('stage', observed=False)[intra_cols].agg(['mean', 'std'])
+
+            # Constructs the Mean ± Std formatted summary table
+            avg_comb_intra_summary = pd.DataFrame(index=grouped.index)
+            for col in intra_cols:
+                means = grouped[(col, 'mean')].round(3).astype(str)
+                stds = grouped[(col, 'std')].round(3).astype(str)
+                avg_comb_intra_summary[col] = means + " \u00b1 " + stds
+
+            avg_comb_intra_summary = avg_comb_intra_summary.reset_index()
+
+            # Displays the summary table in a collapsible output container
+            with collapsible_output('Immob 5s Avg Combined Stage Intra Metrics Summary'):
+                display(avg_comb_intra_summary)
 
         # Concatenates all averaged immediate intra-stage feature dataframes if populated, else assigns an empty dataframe
         avg_imp_intra_df = pd.concat(all_intra_avg_imp, ignore_index=True) if all_intra_avg_imp else pd.DataFrame()
