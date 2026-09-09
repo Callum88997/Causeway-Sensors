@@ -1,0 +1,37 @@
+Placement Goals
+
+Project Objectives
+
+The overall aim of this project is to analyse sensor data generated during the manufacture of biosensor chips and investigate how manufacturing-stage measurements can support process monitoring and quality control.
+
+Specific objectives:
+
+1. Understand the biochip manufacturing process
+
+   * Gain an understanding of the two-stage biochemical manufacturing workflow.
+   * Identify the sensors used and the data generated during chip manufacture.
+
+2. Explore and preprocess manufacturing sensor data
+
+   * Review available datasets and data formats.
+   * Clean, organise, and prepare time-series sensor data for analysis.
+
+3. Develop feature extraction methods
+
+   * Extract meaningful quantitative metrics from manufacturing sensor signals.
+   * Identify features that characterise individual biochemical manufacturing steps.
+
+4. Perform statistical analysis
+
+   * Analyse feature distributions and variability across manufactured chips.
+   * Identify trends, anomalies, and sources of manufacturing variation.
+   * Propose statistical limits and metrics suitable for future quality control.
+
+5. Investigate relationships with final biosensor performance
+
+   * Compare manufacturing-stage features with final chip performance metrics.
+   * Evaluate whether early manufacturing data can predict sensor accuracy, consistency, or overall quality.
+
+6. Produce recommendations
+
+   * Summarise findings and provide recommendations for future process monitoring, automation, and quality control procedures.

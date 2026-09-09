@@ -1,0 +1,19 @@
+Channel lines
+
+	B52501R8060	B52501R8198	B72604R8146	B72604R8034	B52501R8094	B72604R8049	B72604R8007	B72604R8037
+
+PEL	ch1 > ch2	ch1 < ch2	ch1 < ch2	ch1 < ch2	ch1 > ch2	ch1 < ch2	ch1 < ch2	ch1 < ch2
+
+IMMOB	ch1 < ch2	n/a		ch1 < ch2	ch1 < ch2 sc	n/a		n/a		n/a but sc	ch1 > ch2
+
+	R8182		B52501R8567	R72604R8035	B52501R8093	B72604R8043	B72604R8039	B72604R8040	B72604R8096
+	
+PEL	ch1 < ch2	same?		ch1 < ch2	ch1 > ch2	ch1 then ch2	ch1 < ch2	ch1 < ch2	ch1 < ch2
+
+IMMOB 	n/a		n/a		n/a		n/a		n/a but sc	ch1 > ch2	ch1 < ch2	ch1 < ch2
+
+	B72604R8010	B72604R8009	B72604R8053	R8180		B72604R8041	B72604R8016
+
+PEL	ch1 < ch2	ch1 < ch2	ch1 < ch2	ch1 < ch2	ch1 > ch2	ch1 < ch2
+
+IMMOB	n/a		n/a		ch2 > ch1 sc	n/a		n/a but sc	n/a but sc

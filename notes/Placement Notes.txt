@@ -1,0 +1,341 @@
+Placement Notes:
+
+
+04/06/2026:
+
+Got offered placement and accepted it
+
+
+05/06/2026:
+
+Just contact with Kelly and giving address
+
+
+08/06/2026:
+
+Asked to come up Thursday to meet and get an introduction
+
+
+09/06/2026:
+
+Got further details for going up on Thursday
+
+
+10/06/2026:
+
+Adele got me to sign placement contract 
+Due to riots meeting on Thursday was cancelled and moved to online
+Was sent meeting link
+
+
+11/06/2026:
+
+Online meeting with Kelly and Matt McAuley
+Matt ran over the project and what it entails and explained everything that happens during the whole process behind the chips and what they do
+Arranged for me to arrive at 10am on Monday morning
+
+
+Week 1:
+
+
+15/06/2026:
+
+Arrived for 10am and Kelly met me in reception
+They hadn't finished their weekly Monday morning meeting so had to wait for that to finish
+Was introduced to everyone who was in
+Got given a desk to sit at
+Had to log into email and read through health and safety briefs which Megan sent me
+Maggie gave me access to their Streamlit and database
+Other Matt explained whole process to me with the Titan machine
+
+Lunch at 12
+
+After lunch I read through all the data / explored all the data to try understand it all.
+Maaria also took me into lab and explained the graphs to me and walked me through the concept of immobilisation step
+Continued exploring the datasets and looking at graphs
+
+
+16/06/2026:
+
+Arrived for just before 8:30am
+
+Continued reading the different datasets and exploring the data
+Learned about the different methods like PL4 and PL5 to understand how the standard curve graphs came about
+Learned about the standard curve
+Went back to the datasets and went through each one writing down variables I wanted to ask about to understand what they meant / came from
+Also took notes about the different steps of the process and wrote down any questions I have
+
+
+17/06/2026:
+
+Continued looking at data
+Asked Maggie about the data where I wanted to understand a bit better i.e. what a variable meant stuff like that
+Asked Maaria a couple questions about PEL Layers step and Immobilisation step. She explained it all and went through it using a diagram.
+Asked Maaria some questions about the graphs and then also asked what means a bad chip -> bad standard curve graph although chip might still work
+
+
+18/06/2026:
+
+Plotted PEL flags and amf flags on respective sensorgrams to see how the sensorgrams changed at each stage of the different procedures.
+Tried to reverse engineer the analysis section on the PEL graphs which I got nearly spot on by coding my own version since I don't have the code behind that section. This was done because Matt McAuley mentioned on the call last Thursday that I would need to do something similar for the Immobilisation section.
+
+
+19/06/2026:
+
+Finalised all PEL analysis and then did analysis on the immobilisation data.
+Looked at the standard curves and wrote down ones that looked weird.
+Wrote code to save the data belonging to the chip and measurements for the standard curve i.e. PEL and immobilisation data where saved as well.
+
+
+Week 2:
+
+
+22/06/2026:
+
+Team meeting where everyone discusses everything going on and progress on current projects.
+Organised a meeting for Wednesday the 24th on google meet with my in company supervisor and queen's supervisor for the placement.
+Finalised and tidied work from Friday.
+Matt McAuley was back from holidays and gave me full walk through and explanation of everything to do with the Titan PEL system.
+Also got access to more data. Maaria sorted a lot of data for me into a file.
+Plotted standard curve sensorgrams
+Done overall stats for immobolisation steps instead of having strep 1, 2 and so on just strep.
+Matt said about eye balling the buffer zones on the immobilisation graphs and not to worry about coding them so I didn't the opposite and coded a way to detect a buffer zone.
+Did boxplots for the PEL metrics which Matt suggested to do.
+
+
+23/06/2026:
+
+Finished the coding for the buffer zone auto detect.
+Then updated the flags file to store the time for each buffer zone start.
+Had to fix a few issues with loading and saving data to stop duplicates from being created.
+Then made sure code for the different metrics at immobilisation and plotting included the buffer zones.
+Started looking at analysis of each stage in the manufacturing process past what I did i.e. trying to combine data belonging to the chips that have data within all levels of the system.
+Made plan for first placement meeting.
+
+
+24/06/2026:
+
+Finalised presentation slides and tidied up script for the meeting.
+Since I forgot about boxplots for Immobilisation metrics I went and did this.
+Meeting with supervisors at 12.
+Completed minutes for meeting with supervisors.
+Went through all code done so far to clean and tidy it up and remove repeating parts that could be made into methods. Also updated variable naming to make more sense.
+Started making a more in depth plan for the analysis stage to grasp what I really need to do and develop and an area of focus. 
+
+
+25/06/2026:
+
+Finished in depth analysis plan.
+Had a chat with Matt McAuley who wanted to know what I had been up to and talk about yesterdays presentation and gave some more pointers of areas to look at. Also David Matthews explained what each buffer is and what they are for. Also explained on the SC sensorgram it goes buffer -> regen -> buffer -> regen and so on finishing as buffer.
+Started trying to work on getting a 5 second average at specific points
+
+
+26/06/2026:
+
+Finished working on getting a 5 second average at specific points.
+Started getting metrics for these points.
+
+
+Week 3:
+
+
+29/06/2026:
+
+Decided rework the methods for calculating buffer, start, finish, initial and final flags
+
+
+30/06/2026:
+
+Continued working on this and then changed methods for calculating plateaus
+
+
+01/07/2026:
+
+Finished code for calculating plateaus and then worked on calculating baselines. Changed methods for this. Finished all this.
+
+Made sure all metrics code worked as intended. it didn't and has been fixed to work properly now with new changes and new metrics added 
+
+Check final combined part of changed for immediate 
+
+
+02/07/2026:
+
+Fixed a few bugs on methods and no more hard coded flag detection.
+Did flag detection on standard curve sensorgram.
+
+
+03/07/2026:
+
+Wrote out a lot of analysis code and started looking at patterns.
+Got binding kinetics from standard curve sensorgram.
+Looked at binding association and dissociation.
+
+
+
+Week 4:
+
+
+06/07/2026:
+
+Spoke with David and he said I took wrong points for baselines on standard curve sensorgrams so I spent the day working through the problem and updated where I took points from.
+Updated analysis code to have more detail
+Had meeting with Matt who was happy with progress and gave some tips on areas he wanted me to focus analysis code to.
+Arranged meeting with Dermot for Wednesday the 08th at 11am.
+
+
+07/07/2026:
+
+Finished baseline finding code and went on to analysis. Also had to prepare slides for meeting with Dermot. Also booked room in library for meeting.
+
+
+08/07/2026:
+
+Meeting with Dermot went well got some good feedback.
+Made meeting minutes.
+Continued working on analysis code and analysing the data
+
+
+09/07/2026:
+
+Modulularised code so it all runs by method calls making it more dynamic
+
+
+10/07/2026:
+
+Finalised making the code modulular.
+Added more statistic plots to the manufacturing sections.
+Made custom output so output could be in collaspable sections.
+
+
+15/07/2026:
+
+Fixed some bugs in flag methods.
+Filtered out to include only relevant datasets for analysis main goal
+Did some analysis code
+
+
+16/07/2026:
+
+Continued doing analysis code and got some results
+Clustering code
+Fixed more bugs in flag methods
+
+
+17/07/2026:
+
+Continued doing analysis
+
+
+Week 5:
+
+20/07/2026:
+
+analysis and report writing
+
+
+21/07/2026:
+
+analysis and report writing
+
+
+22/07/2026:
+
+analysis and report writing
+
+
+23/07/2026:
+
+analysis and report writing
+
+
+24/07/2026:
+
+kinetic binding, analysis and report writing
+
+
+Week 6:
+
+27/07/2026:
+
+Analysis and meeting with Matt who gave me feedback on work so far and advised more in depth analysis with the correlations.
+Also got me to send code to Maggie to use on streamlit for the metrics calculations for immobilisation stage.
+Wanted me to do some analysis work on the data from BERN.
+Also to look more into the kinetics.
+Sent Maggie function
+
+
+28/07/2026:
+
+More analysis.
+Maggie put function on streamlit
+Completed a lot of Matts feedback, still need to do kinetics and Bern stuff but waiting on data for that.
+Fixed calculating flags for buffers and plateaus as it was finding some weird errors all sorted now.
+
+
+29/07/2026:
+
+Meeting with Dermot.
+Changed the flag finding method completely to use unnamed flag entries in the file.
+Continued working on presentation for meeting on Thursday with the team.
+Finished the presentation and also added a few bits of code to tidy outputs.
+Wrote script for the presentation.
+
+
+30/07/2026:
+
+Finished script for the presentation.
+Gave presentation to the team. It went really well and got lots of feedback, a lot of stuff was lining up well with biology stuff.
+Company pictures then out for someone's leaving do.
+
+
+31/07/2026:
+
+Started working on feedback and updating different parts of the code.
+Started working on the bern analysis code.
+
+
+Week 7:
+
+03/08/2026:
+
+Checked to see how many occurrences of channel 1 and 2 being swapped about occurred.
+Talked to Matt about how sometimes channel 1 and 2 are swapped about to which he said they are interchangeable. This changed my way of thinking to allow channel 1 and 2 to be used together to double the amount of data we have.
+Continued doing Bern Analysis.
+
+
+04/08/2026:
+
+Finished Bern Analysis they wanted done and uploaded it for the biologists.
+Worked on normalising each channel to the value taken at the initial flag.
+Worked on updating the code to work for these changes.
+Also worked on intra stage feature extraction.
+
+
+05/08/2026:
+
+Finalised intra stage feature extraction. Still couldn't get it to pick up some anomalies we could see so tried taking more data but was then causing all chips to nearly be anomalous. Need to get back to this.
+Extracted all functions from the main notebook and then made a scripts file to call them.
+
+
+06/08/2026:
+
+Finalised the function extraction and made it all work.
+Made another scripts file to put the analysis functions in. 
+Combined all channels together for the basic stages need to get this done in the analysis sections.
+Made collapsible sections in the analysis functions.
+
+
+07/08/2026:
+
+Worked on the analysis functions to work for combined channel information.
+Made a more detailed and updated list of intra stage features for finding anomalies.
+
+
+Week 8:
+
+10/08/2026:
+
+OFF
+
+
+11/08/2026:
