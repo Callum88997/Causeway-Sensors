@@ -1,4 +1,6 @@
 *.env
+*.pkl
 data/
+notes/
 gmailcodes.txt
-**/__pycache__/
+**/__pycache__
